@@ -149,64 +149,6 @@ class DeseoApp {
             </div>
         `;
 
-        // Interacciones de fotos (thumbnails, prev/next, gestos)
-        try {
-            const mainPhotoEl = modal.querySelector('#tinderMainPhoto');
-            const thumbEls = Array.from(modal.querySelectorAll('.thumbs .thumb'));
-            let currentIndex = 0;
-
-            // Tomar fuente de fotos de forma segura
-            const photos = (typeof displayProfile !== 'undefined' && displayProfile && Array.isArray(displayProfile.photos))
-                ? displayProfile.photos
-                : [];
-
-            const setActiveIndex = (idx) => {
-                if (!photos || photos.length === 0) return;
-                currentIndex = (idx + photos.length) % photos.length;
-                const src = photos[currentIndex];
-                if (mainPhotoEl && typeof src === 'string') {
-                    mainPhotoEl.src = src;
-                }
-                thumbEls.forEach((t, i) => t.classList.toggle('active', i === currentIndex));
-            };
-
-            // Si no hay elementos o fotos, salir silenciosamente
-            if (!mainPhotoEl || photos.length === 0) {
-                // No hay nada que inicializar, continuar sin error
-            } else {
-            thumbEls.forEach((thumb, idx) => {
-                thumb.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    setActiveIndex(idx);
-                });
-            });
-
-            const prevBtn = modal.querySelector('#tinderPrevPhoto');
-            const nextBtn = modal.querySelector('#tinderNextPhoto');
-            if (prevBtn) prevBtn.addEventListener('click', (e) => { e.stopPropagation(); setActiveIndex(currentIndex - 1); });
-            if (nextBtn) nextBtn.addEventListener('click', (e) => { e.stopPropagation(); setActiveIndex(currentIndex + 1); });
-
-            let startX = 0;
-            let isTouching = false;
-            const onTouchStart = (e) => { isTouching = true; startX = e.touches ? e.touches[0].clientX : e.clientX; };
-            const onTouchEnd = (e) => {
-                if (!isTouching) return;
-                const endX = e.changedTouches ? e.changedTouches[0].clientX : e.clientX;
-                const delta = endX - startX;
-                if (Math.abs(delta) > 40) {
-                    if (delta < 0) setActiveIndex(currentIndex + 1); else setActiveIndex(currentIndex - 1);
-                }
-                isTouching = false;
-            };
-                mainPhotoEl.addEventListener('touchstart', onTouchStart, { passive: true });
-                mainPhotoEl.addEventListener('touchend', onTouchEnd);
-                mainPhotoEl.addEventListener('mousedown', onTouchStart);
-                mainPhotoEl.addEventListener('mouseup', onTouchEnd);
-
-            setActiveIndex(0);
-            }
-        } catch (err) { console.warn('Photo interactions init failed:', err); }
-
         // Agregar estilos
         const style = document.createElement('style');
         style.textContent = `
@@ -749,21 +691,23 @@ class DeseoApp {
         console.log('✅ Clerk available. Opening sign-in...');
         
         try {
-            // Asegurar que Clerk esté completamente cargado
-            if (typeof window.Clerk.load === 'function') {
-                try {
-                    await window.Clerk.load();
-                } catch (e) {
-                    console.warn('⚠️ Clerk.load() lanzó un aviso, continuando:', e);
-                }
-            }
-            
-            // Usar openSignIn() que maneja su propio modal y evita conflictos de DOM
-            if (typeof window.Clerk.openSignIn === 'function') {
+            // Clerk ya fue inicializado en index.html con su bundle de UI.
+            // NO volver a llamar load() aquí (sin {ui} desactivaría los componentes).
+            var clerk = window.__DESEO_CLERK__ || window.Clerk;
+
+            if (clerk && typeof clerk.openSignIn === 'function') {
                 console.log('✅ Abriendo modal de sign-in con Clerk...');
-                window.Clerk.openSignIn();
+                clerk.openSignIn();
             } else {
-                throw new Error('Clerk.openSignIn no está disponible');
+                // Fallback: montar el componente sign-in en el contenedor dedicado.
+                var target = document.getElementById('authContainer');
+                if (clerk && typeof clerk.mountSignIn === 'function' && target) {
+                    console.log('✅ Montando sign-in con mountSignIn...');
+                    target.classList.add('active');
+                    clerk.mountSignIn(target);
+                } else {
+                    throw new Error('Clerk.openSignIn no está disponible');
+                }
             }
             
         } catch (error) {
@@ -956,13 +900,21 @@ class DeseoApp {
         }
 
         // Toggle del sidebar para ocultar/mostrar el menú
+        // Usamos delegación en document para máxima fiabilidad (el botón puede
+        // re-renderizarse o existir en distintos contenedores).
+        if (!this._sidebarToggleBound) {
+            this._sidebarToggleBound = true;
+            document.addEventListener('click', (e) => {
+                const toggle = e.target.closest && e.target.closest('#sidebarToggle');
+                if (toggle) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    this.toggleSidebarMenu();
+                }
+            }, true); // fase de captura para adelantarnos a otros handlers
+        }
         const sidebarToggle = document.getElementById('sidebarToggle');
-        if (sidebarToggle) {
-            sidebarToggle.addEventListener('click', (e) => {
-                e.stopPropagation(); // Prevenir que se propague el evento
-                this.toggleSidebarMenu();
-            });
-        } else {
+        if (!sidebarToggle) {
             console.warn('⚠️ sidebarToggle not found');
         }
 
@@ -1317,69 +1269,11 @@ class DeseoApp {
 
     // ===== GENERACIÓN DE DATOS DE PRUEBA (ADAPTADO PARA DESEOS) =====
     generateSampleWishes() { // Renombrado de generateSampleStores a generateSampleWishes
-        this.wishes = [
-            {
-                id: 'wish1',
-                title: 'Comprar café en Starbucks',
-                description: 'Necesito que alguien me compre un café grande de vainilla en Starbucks y me lo traiga a mi oficina.',
-                price: 8,
-                priceFormatted: '$8',
-                category: 'comida',
-                location: { lat: 40.4168, lng: -3.7038 }, // Madrid
-                author: { id: 'user2', name: 'María García' },
-                status: 'active',
-                createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000)
-            },
-            {
-                id: 'wish2',
-                title: 'Pasear a mi perro',
-                description: 'Busco alguien que pueda pasear a mi perro Golden Retriever por 30 minutos en el parque.',
-                price: 15,
-                priceFormatted: '$15',
-                category: 'servicios',
-                location: { lat: 40.4268, lng: -3.7138 }, // Madrid (cerca)
-                author: { id: 'user3', name: 'Carlos López' },
-                status: 'active',
-                createdAt: new Date(Date.now() - 1 * 60 * 60 * 1000)
-            },
-            {
-                id: 'wish3',
-                title: 'Llevar paquete a correos',
-                description: 'Necesito que alguien lleve un paquete pequeño a la oficina de correos más cercana.',
-                price: 12,
-                priceFormatted: '$12',
-                category: 'servicios',
-                location: { lat: 40.4068, lng: -3.6938 }, // Madrid (cerca)
-                author: { id: 'user4', name: 'Ana Martínez' },
-                status: 'active',
-                createdAt: new Date(Date.now() - 30 * 60 * 1000)
-            },
-            {
-                id: 'wish4',
-                title: 'Comprar ingredientes para cena',
-                description: 'Necesito que alguien compre los ingredientes para hacer pasta: tomates, cebolla, ajo y queso parmesano.',
-                price: 20,
-                priceFormatted: '$20',
-                category: 'compras',
-                location: { lat: 40.4368, lng: -3.7238 }, // Madrid (cerca)
-                author: { id: 'user5', name: 'Roberto Silva' },
-                status: 'active',
-                createdAt: new Date(Date.now() - 45 * 60 * 1000)
-            },
-            {
-                id: 'wish5',
-                title: 'Dar un paseo en bicicleta',
-                description: 'Busco compañía para dar un paseo en bicicleta por el centro de la ciudad este fin de semana.',
-                price: 25,
-                priceFormatted: '$25',
-                category: 'entretenimiento',
-                location: { lat: 40.3968, lng: -3.6838 }, // Madrid (cerca)
-                author: { id: 'user6', name: 'Laura Fernández' },
-                status: 'active',
-                createdAt: new Date(Date.now() - 3 * 60 * 60 * 1000)
-            }
-        ];
+        // Sin datos de prueba: los deseos/perfiles se cargan solo desde Firebase.
+        // Se mantiene el método para no romper llamadas existentes.
+        this.wishes = [];
     }
+
 
     // ===== RENDERIZADO DEL MAPA =====
     renderWishesOnMap() { // Renombrado de renderStoresOnMap a renderWishesOnMap
@@ -1438,10 +1332,13 @@ class DeseoApp {
     }
 
     createWishPopupHTML(wish) { // Renombrado de createStorePopupHTML a createWishPopupHTML
+        const __title = (typeof escapeHtml === 'function') ? escapeHtml(wish.title) : wish.title;
+        const __price = (typeof escapeInt === 'function') ? escapeInt(wish.price, '') : wish.price;
+        const __cat = (typeof escapeHtml === 'function') ? escapeHtml(this.getCategoryName(wish.category)) : this.getCategoryName(wish.category);
         return `
             <div class="wish-marker-popup">
-                <h3>${wish.title}</h3>
-                <p>$${wish.price} • ${this.getCategoryName(wish.category)}</p>
+                <h3>${__title}</h3>
+                <p>${__price} • ${__cat}</p>
             </div>
         `;
     }
@@ -1962,10 +1859,10 @@ class DeseoApp {
         markerElement.className = 'custom-profile-marker';
         markerElement.innerHTML = `
             <div class="marker-container">
-                <img src="${mainPhoto}" 
-                     alt="${nickname}" class="marker-avatar">
-                <div class="marker-alias">${nickname}</div>
-                <div class="marker-category">${this.getCategoryName(profile.category)}</div>
+                <img src="${(typeof safeUrl==='function'?safeUrl(mainPhoto):mainPhoto)}" 
+                     alt="${escapeHtml(nickname)}" class="marker-avatar">
+                <div class="marker-alias">${escapeHtml(nickname)}</div>
+                <div class="marker-category">${escapeHtml(this.getCategoryName(profile.category))}</div>
             </div>
         `;
 
@@ -1997,17 +1894,6 @@ class DeseoApp {
         return colors[category] || '#60c48e';
     }
 
-    getCategoryName(category) {
-        const names = {
-            'escort': 'Escort',
-            'gigolo': 'Gigolo',
-            'masajes': 'Masajes',
-            'trans': 'Trans',
-            'chat': 'Chat',
-            'live': 'Live'
-        };
-        return names[category] || category;
-    }
 
     // ===== Actualizar estado visual del botón flotante de disponibilidad =====
     updateAvailabilityFabState() {
@@ -2254,20 +2140,14 @@ class DeseoApp {
     initializeGeminiClient() {
         try {
             const cfg = CONFIG.AI && CONFIG.AI.GEMINI;
-            if (!cfg || !cfg.enabled || !cfg.apiKey) {
+            if (!cfg || !cfg.enabled || !cfg.proxyUrl) {
                 console.log('Gemini config not available');
                 return null;
             }
-            
-            // Verificar que la API key no sea el placeholder
-            if (cfg.apiKey === 'PON_AQUI_TU_API_KEY_DE_GEMINI' || cfg.apiKey.length < 10) {
-                console.log('Gemini API key not configured properly');
-                return null;
-            }
-            
-            console.log('Gemini REST API client initialized successfully');
+            console.log('Gemini proxy client initialized successfully');
             return {
-                apiKey: cfg.apiKey,
+                // La key de Gemini NO vive en el cliente: se llama al proxy serverless.
+                proxyUrl: cfg.proxyUrl,
                 model: cfg.model,
                 apiUrl: cfg.apiUrl
             };
@@ -2301,23 +2181,16 @@ class DeseoApp {
 
             console.log('Sending request to Gemini REST API...');
             
-            // Usar la API REST directamente como sugiere la documentación
-            const response = await fetch(`${client.apiUrl}/${client.model}:generateContent`, {
+            // La key de Gemini NO vive en el cliente. Se llama al proxy serverless,
+            // que es el único que conoce GEMINI_API_KEY (env del servidor).
+            const response = await fetch(client.proxyUrl, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json',
-                    'X-goog-api-key': client.apiKey
+                    'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
-                    contents: [
-                        {
-                            parts: [
-                                {
-                                    text: fullPrompt
-                                }
-                            ]
-                        }
-                    ]
+                    prompt: fullPrompt,
+                    model: client.model
                 })
             });
 
@@ -2327,10 +2200,9 @@ class DeseoApp {
 
             const data = await response.json();
             
-            if (data && data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) {
-                const text = data.candidates[0].content.parts[0].text;
-                console.log('Gemini response received:', text);
-                return text;
+            if (data && data.success && data.text) {
+                console.log('Gemini response received');
+                return data.text;
             }
             
             console.log('No response text from Gemini');
@@ -2639,77 +2511,125 @@ class DeseoApp {
 
         console.log('🎯 Perfil final para mostrar:', displayProfile);
 
-        // Crear modal tipo Tinder
+        // ===== Construir lista de fotos (sin tarjeta de info final) =====
+        const storyPhotos = (displayProfile.photos && displayProfile.photos.length > 0)
+            ? displayProfile.photos
+            : [displayProfile.userProfileImage || 'https://www.gravatar.com/avatar/?d=mp&f=y'];
+        const totalStories = storyPhotos.length;
+
+        // ===== ALGORITMO DE DISTRIBUCIÓN DE INFO SOBRE LAS FOTOS =====
+        // Se construye una lista de "bloques de información" y se reparten
+        // entre las fotos disponibles. Si hay 1 sola foto, se muestran todos
+        // los bloques en ella. Si hay N fotos, se distribuyen de forma
+        // equilibrada (round-robin) para que ninguna quede sobrecargada.
+        const infoBlocks = [];
+
+        // Bloque 1: identidad (nombre + edad + categoría) — siempre primero
+        infoBlocks.push({
+            type: 'identity',
+            html: `
+                <div class="overlay-identity">
+                    <div class="overlay-avatar-wrap">
+                        <img src="${(typeof safeUrl==='function'?safeUrl(displayProfile.userProfileImage):displayProfile.userProfileImage) || 'https://www.gravatar.com/avatar/?d=mp&f=y'}"
+                             alt="${escapeHtml(displayProfile.userName)}" class="overlay-avatar">
+                    </div>
+                    <div class="overlay-name-row">
+                        <h2 class="overlay-name">${escapeHtml(displayProfile.userName || 'Usuario')}</h2>
+                        ${displayProfile.age && displayProfile.age !== 'No especificada' ? `<span class="overlay-age">${escapeInt(displayProfile.age, '')}</span>` : ''}
+                    </div>
+                    <div class="overlay-badges">
+                        <span class="category-badge ${escapeAttr(displayProfile.category)}">${escapeHtml(this.getCategoryName(displayProfile.category))}</span>
+                        <span class="status-badge"><i class="fas fa-circle"></i> Disponible ahora</span>
+                    </div>
+                </div>
+            `
+        });
+
+        // Bloque 2: descripción
+        if (displayProfile.description && displayProfile.description !== 'Descripción no disponible') {
+            infoBlocks.push({
+                type: 'description',
+                html: `<p class="overlay-description">${escapeHtml(displayProfile.description)}</p>`
+            });
+        }
+
+        // Bloque 3: ubicación / disponibilidad
+        infoBlocks.push({
+            type: 'stats',
+            html: `
+                <div class="overlay-stats">
+                    <div class="stat-item"><i class="fas fa-map-marker-alt"></i><span>Ubicación cercana</span></div>
+                    <div class="stat-item"><i class="fas fa-clock"></i><span>Disponible ahora</span></div>
+                </div>
+            `
+        });
+
+        // Bloque 4: poses favoritas (si existen)
+        if (displayProfile.favoritePoses && displayProfile.favoritePoses.length > 0) {
+            infoBlocks.push({
+                type: 'poses',
+                html: `
+                    <div class="overlay-poses">
+                        <h4><i class="fas fa-heart"></i> Poses Favoritas</h4>
+                        <div class="poses-tags">
+                            ${displayProfile.favoritePoses.map(pose => `<span class="pose-tag">${this.getSexualPoseName(pose)}</span>`).join('')}
+                        </div>
+                    </div>
+                `
+            });
+        }
+
+        // Repartir los bloques entre las fotos (round-robin).
+        // Con 1 foto => todos los bloques en esa foto.
+        // Con N fotos => cada bloque cae en una foto distinta, ciclando.
+        const blocksPerPhoto = storyPhotos.map(() => []);
+        infoBlocks.forEach((block, i) => {
+            blocksPerPhoto[i % storyPhotos.length].push(block);
+        });
+
+        // Crear modal tipo Instagram Stories (info superpuesta sobre cada foto)
         const modal = document.createElement('div');
         modal.className = 'tinder-profile-modal';
         modal.innerHTML = `
             <div class="modal-overlay">
                 <div class="modal-content tinder-card">
-                    <div class="tinder-header">
-                        <button class="close-btn" onclick="this.closest('.tinder-profile-modal').remove()">
-                            <i class="fas fa-times"></i>
-                        </button>
+                    <!-- Barra de progreso tipo stories -->
+                    <div class="stories-progress" id="storiesProgress">
+                        ${Array.from({ length: totalStories }).map((_, i) => `
+                            <span class="story-segment" data-index="${i}"><i></i></span>
+                        `).join('')}
                     </div>
-                    <div class="tinder-photos">
-                        <img src="${displayProfile.userProfileImage || 'https://www.gravatar.com/avatar/?d=mp&f=y'}" 
-                             alt="${displayProfile.userName}" class="main-photo" id="tinderMainPhoto">
-                        ${displayProfile.photos && displayProfile.photos.length > 1 ? `
-                        <div class="photo-nav">
-                            <button class="nav-btn prev" id="tinderPrevPhoto"><i class="fas fa-chevron-left"></i></button>
-                            <button class="nav-btn next" id="tinderNextPhoto"><i class="fas fa-chevron-right"></i></button>
-                        </div>
-                        ` : ''}
-                        ${displayProfile.photos && displayProfile.photos.length > 1 ? `
-                        <div class="thumbs">
-                            ${displayProfile.photos.slice(0, 6).map((p, idx) => `
-                                <img src="${p}" alt="foto ${idx+1}" class="thumb ${idx===0 ? 'active' : ''}" data-src="${p}">
-                            `).join('')}
-                        </div>
-                        ` : ''}
-                    </div>
-                    <div class="tinder-info">
-                        <div class="profile-name">
-                            <h2>${displayProfile.userName || 'Usuario'}</h2>
-                            <span class="category-badge ${displayProfile.category}">${this.getCategoryName(displayProfile.category)}</span>
-                        </div>
-                        <div class="profile-details">
-                            <p class="profile-description">${displayProfile.description}</p>
-                            <div class="profile-stats">
-                                <div class="stat-item">
-                                    <i class="fas fa-map-marker-alt"></i>
-                                    <span>Ubicación cercana</span>
+
+                    <!-- Zonas de tap: izquierda = anterior, derecha = siguiente -->
+                    <div class="story-tap-zone tap-left" id="storyTapLeft"></div>
+                    <div class="story-tap-zone tap-right" id="storyTapRight"></div>
+
+                    <!-- Slides (solo fotos, con info superpuesta) -->
+                    <div class="stories-track" id="storiesTrack">
+                        ${storyPhotos.map((src, idx) => `
+                            <div class="story-slide story-photo-slide" data-index="${idx}">
+                                <img src="${(typeof safeUrl==='function'?safeUrl(src):src)}" alt="${escapeHtml(displayProfile.userName)}" class="story-photo">
+                                <div class="story-photo-gradient"></div>
+                                <div class="story-overlay-info">
+                                    ${blocksPerPhoto[idx].map(b => b.html).join('')}
                                 </div>
-                                <div class="stat-item">
-                                    <i class="fas fa-clock"></i>
-                                    <span>Disponible ahora</span>
-                                </div>
-                                <div class="stat-item">
-                                    <i class="fas fa-birthday-cake"></i>
-                                    <span>Edad: ${displayProfile.age}</span>
-                                </div>
-                                <div class="stat-item">
-                                    <i class="fas fa-tag"></i>
-                                    <span>${this.getCategoryName(displayProfile.category)}</span>
+                                <!-- Acciones presentes en TODAS las fotos -->
+                                <div class="tinder-actions overlay-actions">
+                                    <button class="action-btn pass-btn" onclick="window.deseoApp.closeTinderModal()" title="Cerrar">
+                                        <i class="fas fa-times"></i>
+                                    </button>
+                                    <button class="action-btn contact-btn" onclick="window.deseoApp.contactProfile('${profile.userId}')" title="Contactar">
+                                        <i class="fas fa-comment"></i>
+                                    </button>
                                 </div>
                             </div>
-                            ${displayProfile.favoritePoses && displayProfile.favoritePoses.length > 0 ? `
-                                <div class="favorite-poses">
-                                    <h4><i class="fas fa-heart"></i> Poses Favoritas</h4>
-                                    <div class="poses-tags">
-                                        ${displayProfile.favoritePoses.map(pose => `<span class="pose-tag">${this.getSexualPoseName(pose)}</span>`).join('')}
-                                    </div>
-                                </div>
-                            ` : ''}
-                        </div>
+                        `).join('')}
                     </div>
-                    <div class="tinder-actions">
-                        <button class="action-btn pass-btn" onclick="window.deseoApp.passToNextProfile()">
-                            <i class="fas fa-times"></i>
-                        </button>
-                        <button class="action-btn contact-btn" onclick="window.deseoApp.contactProfile('${profile.userId}')">
-                            <i class="fas fa-comment"></i>
-                        </button>
-                    </div>
+
+                    <!-- Botón cerrar -->
+                    <button class="close-btn" onclick="window.deseoApp.closeTinderModal()">
+                        <i class="fas fa-times"></i>
+                    </button>
                 </div>
             </div>
         `;
@@ -2731,139 +2651,242 @@ class DeseoApp {
                 background: rgba(0, 0, 0, 0.8);
             }
             .tinder-card {
-                width: 90%;
-                max-width: 420px;
-                height: 85vh;
-                background: var(--background-secondary);
-                border-radius: 24px;
+                /* Proporción tipo historia vertical (9:16) con límites de viewport */
+                width: min(92vw, 460px);
+                height: min(88vh, calc(min(92vw, 460px) * 16 / 9));
+                max-height: 92vh;
+                aspect-ratio: 9 / 16;
+                background: linear-gradient(160deg, rgba(30, 32, 38, 0.92) 0%, rgba(18, 19, 24, 0.96) 100%);
+                backdrop-filter: blur(24px) saturate(140%);
+                -webkit-backdrop-filter: blur(24px) saturate(140%);
+                border: 1px solid rgba(255, 255, 255, 0.10);
+                border-radius: 28px;
                 overflow: hidden;
                 position: relative;
-                box-shadow: 0 25px 50px rgba(0, 0, 0, 0.4);
+                box-shadow: 0 30px 70px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255,255,255,0.04) inset;
                 display: flex;
                 flex-direction: column;
             }
-            .tinder-header {
+            /* Ajuste para pantallas bajas (laptops pequeñas / landscape) */
+            @media (max-height: 700px) {
+                .tinder-card {
+                    height: 94vh;
+                    max-height: 94vh;
+                    width: auto;
+                    aspect-ratio: 9 / 16;
+                }
+            }
+            /* ===== Barra de progreso tipo stories ===== */
+            .stories-progress {
                 position: absolute;
-                top: 16px;
-                right: 16px;
-                z-index: 10;
-            }
-            .tinder-header .close-btn {
-                background: rgba(0, 0, 0, 0.6);
-                border: none;
-                color: white;
-                width: 44px;
-                height: 44px;
-                border-radius: 50%;
+                top: 12px;
+                left: 12px;
+                right: 12px;
                 display: flex;
-                align-items: center;
-                justify-content: center;
-                cursor: pointer;
-                font-size: 1.3rem;
-                transition: all 0.2s ease;
+                gap: 4px;
+                z-index: 30;
+                pointer-events: none;
             }
-            .tinder-header .close-btn:hover {
-                background: rgba(0, 0, 0, 0.8);
-                transform: scale(1.1);
-            }
-            .tinder-photos {
-                height: 55%;
-                position: relative;
+            .story-segment {
+                flex: 1;
+                height: 3px;
+                border-radius: 3px;
+                background: rgba(255,255,255,0.28);
                 overflow: hidden;
-                display: flex;
-                flex-direction: column;
             }
-            .main-photo {
+            .story-segment i {
+                display: block;
+                height: 100%;
+                width: 0%;
+                background: #fff;
+                border-radius: 3px;
+                transition: width 0.25s ease;
+            }
+            .story-segment.active i { width: 100%; }
+            .story-segment.viewed i { width: 100%; background: rgba(255,255,255,0.85); }
+
+            /* ===== Zonas de tap (izquierda = anterior, derecha = siguiente) ===== */
+            .story-tap-zone {
+                position: absolute;
+                top: 0;
+                bottom: 0;
+                width: 50%;
+                z-index: 20;
+                cursor: pointer;
+            }
+            .story-tap-zone.tap-left { left: 0; }
+            .story-tap-zone.tap-right { right: 0; }
+
+            /* ===== Track de slides ===== */
+            .stories-track {
+                position: absolute;
+                inset: 0;
+                display: flex;
+                transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+                will-change: transform;
+            }
+            .story-slide {
+                position: relative;
+                min-width: 100%;
+                width: 100%;
+                height: 100%;
+                overflow: hidden;
+                background: #0d0e12;
+            }
+            .story-photo {
                 width: 100%;
                 height: 100%;
                 object-fit: cover;
+                display: block;
+                user-select: none;
+                -webkit-user-drag: none;
             }
-            .thumbs {
+            .story-photo-gradient {
                 position: absolute;
-                bottom: 12px;
-                left: 50%;
-                transform: translateX(-50%);
-                display: flex;
-                gap: 8px;
-                padding: 8px 12px;
-                background: rgba(0,0,0,0.4);
-                border-radius: 16px;
-                max-width: 90%;
-                overflow-x: auto;
-                backdrop-filter: blur(10px);
-            }
-            .thumbs .thumb {
-                width: 52px;
-                height: 52px;
-                border-radius: 10px;
-                object-fit: cover;
-                cursor: pointer;
-                border: 3px solid transparent;
-                transition: all 0.2s ease;
-            }
-            .thumbs .thumb.active {
-                border-color: var(--primary-color);
-                transform: scale(1.05);
-            }
-            .photo-nav {
-                position: absolute;
-                top: 50%;
-                left: 0;
-                right: 0;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                padding: 0 12px;
-                transform: translateY(-50%);
+                inset: 0;
+                background: linear-gradient(to top, rgba(10, 11, 15, 0.92) 0%, rgba(10, 11, 15, 0.55) 32%, rgba(10, 11, 15, 0.05) 62%, rgba(10, 11, 15, 0) 100%);
                 pointer-events: none;
             }
-            .photo-nav .nav-btn {
-                width: 40px;
-                height: 40px;
-                border-radius: 50%;
-                border: none;
-                background: rgba(0,0,0,0.5);
-                color: #fff;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                cursor: pointer;
-                pointer-events: auto;
-                transition: all 0.2s ease;
-                font-size: 1.1rem;
-            }
-            .photo-nav .nav-btn:hover {
-                background: rgba(0,0,0,0.7);
-                transform: scale(1.1);
-            }
-            .tinder-info {
-                padding: 24px;
-                height: 45%;
+
+            /* ===== Info superpuesta sobre cada foto ===== */
+            .story-overlay-info {
+                position: absolute;
+                left: 0;
+                right: 0;
+                bottom: 96px; /* deja espacio para los botones de acción */
+                padding: 0 20px;
+                z-index: 15;
                 display: flex;
                 flex-direction: column;
-                justify-content: space-between;
-                background: var(--background-secondary);
+                gap: 12px;
+                pointer-events: none; /* no bloquea taps/swipes */
+                max-height: calc(100% - 140px);
+                overflow-y: auto;
+                -webkit-overflow-scrolling: touch;
             }
-            .profile-name {
+            .story-overlay-info::-webkit-scrollbar { width: 0; }
+            .overlay-identity {
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+            }
+            .overlay-avatar-wrap {
                 display: flex;
                 align-items: center;
-                gap: 12px;
-                margin-bottom: 16px;
             }
-            .profile-name h2 {
-                color: var(--text-primary);
-                font-size: 1.6rem;
+            .overlay-avatar {
+                width: 56px;
+                height: 56px;
+                border-radius: 50%;
+                object-fit: cover;
+                border: 2px solid rgba(255,255,255,0.35);
+                box-shadow: 0 6px 18px rgba(0,0,0,0.5);
+            }
+            .overlay-name-row {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                flex-wrap: wrap;
+            }
+            .overlay-name {
+                color: #fff;
+                font-size: 1.7rem;
                 margin: 0;
                 font-weight: 700;
+                line-height: 1.1;
+                text-shadow: 0 2px 12px rgba(0,0,0,0.6);
+            }
+            .overlay-age {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                min-width: 34px;
+                height: 34px;
+                padding: 0 9px;
+                border-radius: 12px;
+                background: rgba(255,255,255,0.16);
+                border: 1px solid rgba(255,255,255,0.25);
+                color: #fff;
+                font-weight: 600;
+                font-size: 0.95rem;
+                backdrop-filter: blur(6px);
+            }
+            .overlay-badges {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px;
+            }
+            .overlay-description {
+                color: rgba(255,255,255,0.92);
+                line-height: 1.55;
+                margin: 0;
+                font-size: 0.98rem;
+                text-shadow: 0 1px 8px rgba(0,0,0,0.7);
+            }
+            .overlay-stats {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px;
+            }
+            .overlay-stats .stat-item {
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                color: rgba(255,255,255,0.9);
+                font-size: 0.82rem;
+                padding: 8px 12px;
+                background: rgba(255,255,255,0.12);
+                border: 1px solid rgba(255,255,255,0.16);
+                border-radius: 14px;
+                backdrop-filter: blur(8px);
+            }
+            .overlay-stats .stat-item i {
+                color: var(--primary-color);
+                font-size: 0.9rem;
+            }
+            .overlay-poses h4 {
+                color: rgba(255,255,255,0.95);
+                font-size: 0.9rem;
+                margin: 0 0 8px;
+                font-weight: 600;
+                text-shadow: 0 1px 8px rgba(0,0,0,0.7);
+            }
+            .profile-badges {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px;
             }
             .category-badge {
                 padding: 6px 14px;
                 border-radius: 24px;
-                font-size: 0.85rem;
-                font-weight: 600;
+                font-size: 0.78rem;
+                font-weight: 700;
                 color: white;
                 text-transform: uppercase;
-                letter-spacing: 0.5px;
+                letter-spacing: 0.6px;
+                box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+            }
+            .status-badge {
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                padding: 6px 12px;
+                border-radius: 24px;
+                font-size: 0.78rem;
+                font-weight: 600;
+                color: #d1fae5;
+                background: rgba(16, 185, 129, 0.18);
+                border: 1px solid rgba(16, 185, 129, 0.4);
+                backdrop-filter: blur(6px);
+            }
+            .status-badge i {
+                font-size: 0.5rem;
+                color: #34d399;
+                animation: statusPulse 1.8s infinite;
+            }
+            @keyframes statusPulse {
+                0%, 100% { opacity: 1; }
+                50% { opacity: 0.35; }
             }
             .category-badge.escort { background: linear-gradient(135deg, #e91e63, #c2185b); }
             .category-badge.gigolo { background: linear-gradient(135deg, #2196f3, #1976d2); }
@@ -2876,57 +2899,89 @@ class DeseoApp {
             .category-badge.compras { background: linear-gradient(135deg, #795548, #5d4037); }
             .category-badge.transporte { background: linear-gradient(135deg, #3f51b5, #303f9f); }
             .category-badge.entretenimiento { background: linear-gradient(135deg, #9c27b0, #7b1fa2); }
+            .tinder-info {
+                flex: 0 0 auto;
+                max-height: 42%;
+                display: flex;
+                flex-direction: column;
+                background: transparent;
+            }
+            .info-scroll {
+                padding: 18px 22px 8px;
+                overflow-y: auto;
+                flex: 1 1 auto;
+                min-height: 0;
+            }
+            .info-scroll::-webkit-scrollbar { width: 6px; }
+            .info-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
             .profile-description {
-                color: var(--text-secondary);
+                color: rgba(255,255,255,0.82);
                 line-height: 1.6;
-                margin-bottom: 20px;
-                font-size: 1rem;
+                margin: 0 0 16px;
+                font-size: 0.98rem;
             }
             .profile-stats {
                 display: grid;
                 grid-template-columns: 1fr 1fr;
-                gap: 12px;
-                margin-bottom: 20px;
+                gap: 10px;
+                margin-bottom: 16px;
             }
             .stat-item {
                 display: flex;
                 align-items: center;
                 gap: 10px;
-                color: var(--text-secondary);
-                font-size: 0.9rem;
-                padding: 8px 12px;
-                background: var(--background-tertiary);
-                border-radius: 12px;
+                color: rgba(255,255,255,0.75);
+                font-size: 0.85rem;
+                padding: 10px 12px;
+                background: rgba(255,255,255,0.05);
+                border: 1px solid rgba(255,255,255,0.07);
+                border-radius: 14px;
             }
             .stat-item i {
                 color: var(--primary-color);
                 width: 18px;
-                font-size: 1rem;
+                font-size: 0.95rem;
             }
             .tinder-actions {
                 display: flex;
                 justify-content: center;
-                gap: 24px;
-                padding: 20px 0 0 0;
-                border-top: 1px solid var(--border-color);
+                gap: 28px;
+                padding: 14px 22px 20px;
+                border-top: 1px solid rgba(255,255,255,0.08);
+            }
+            /* ===== Botones flotantes superpuestos sobre cada foto ===== */
+            .overlay-actions {
+                position: absolute;
+                left: 0;
+                right: 0;
+                bottom: 16px;
+                z-index: 25;
+                border-top: none;
+                background: none;
+                padding: 0;
+                pointer-events: auto; /* sí permiten clic */
+            }
+            .overlay-actions .action-btn {
+                box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255,255,255,0.12) inset;
             }
             .action-btn {
-                width: 64px;
-                height: 64px;
+                width: 62px;
+                height: 62px;
                 border-radius: 50%;
                 border: none;
                 display: flex;
                 align-items: center;
                 justify-content: center;
-                font-size: 1.6rem;
+                font-size: 1.5rem;
                 cursor: pointer;
-                transition: all 0.3s ease;
-                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+                transition: all 0.25s ease;
+                box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
             }
             .action-btn:hover {
-                transform: scale(1.1);
-                box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3);
+                transform: scale(1.1) translateY(-2px);
+                box-shadow: 0 12px 26px rgba(0, 0, 0, 0.45);
             }
+            .action-btn:active { transform: scale(0.96); }
             .pass-btn {
                 background: linear-gradient(135deg, #ff4757, #ff3742);
                 color: white;
@@ -2934,19 +2989,18 @@ class DeseoApp {
             .contact-btn {
                 background: linear-gradient(135deg, #10b981, #059669);
                 color: white;
-                box-shadow: 0 4px 8px rgba(16, 185, 129, 0.3);
+                box-shadow: 0 8px 20px rgba(16, 185, 129, 0.4);
             }
             .contact-btn:hover {
                 background: linear-gradient(135deg, #059669, #047857);
-                transform: translateY(-2px);
-                box-shadow: 0 6px 12px rgba(16, 185, 129, 0.4);
+                box-shadow: 0 12px 26px rgba(16, 185, 129, 0.5);
             }
             .favorite-poses {
-                margin-top: 16px;
+                margin-top: 4px;
             }
             .favorite-poses h4 {
-                color: var(--text-primary);
-                font-size: 1rem;
+                color: rgba(255,255,255,0.9);
+                font-size: 0.95rem;
                 margin-bottom: 10px;
                 font-weight: 600;
             }
@@ -2956,22 +3010,89 @@ class DeseoApp {
                 gap: 8px;
             }
             .pose-tag {
-                background: linear-gradient(135deg, #10b981, #059669);
+                background: linear-gradient(135deg, rgba(16,185,129,0.9), rgba(5,150,105,0.9));
                 color: white;
                 padding: 6px 12px;
                 border-radius: 16px;
-                font-size: 0.8rem;
+                font-size: 0.78rem;
                 font-weight: 500;
-                box-shadow: 0 2px 4px rgba(16, 185, 129, 0.3);
+                box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
             }
             @keyframes modalFadeIn {
                 from {
                     opacity: 0;
-                    transform: scale(0.9);
+                    transform: scale(0.92);
                 }
                 to {
                     opacity: 1;
                     transform: scale(1);
+                }
+            }
+            @keyframes modalFadeOut {
+                from {
+                    opacity: 1;
+                    transform: scale(1);
+                }
+                to {
+                    opacity: 0;
+                    transform: scale(0.94);
+                }
+            }
+            /* ===== Optimización móvil: NO fullscreen, respeta header y menú ===== */
+            @media (max-width: 768px) {
+                .tinder-profile-modal {
+                    align-items: center;
+                    justify-content: center;
+                    padding: calc(var(--mobile-header-height, 64px) + 12px) 12px calc(12px + env(safe-area-inset-bottom, 0px));
+                    animation: overlayFadeIn 0.25s ease;
+                    box-sizing: border-box;
+                }
+                @keyframes overlayFadeIn {
+                    from { opacity: 0; }
+                    to { opacity: 1; }
+                }
+                .tinder-card {
+                    /* Ocupa solo el espacio disponible, sin tapar el header/menú */
+                    width: min(94vw, 440px);
+                    max-width: 94vw;
+                    height: auto;
+                    max-height: 100%;
+                    aspect-ratio: 9 / 16;
+                    border-radius: 24px;
+                    animation: cardPopIn 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+                    will-change: transform;
+                }
+                @keyframes cardPopIn {
+                    from { transform: scale(0.94); opacity: 0; }
+                    to { transform: scale(1); opacity: 1; }
+                }
+                .tinder-card.closing {
+                    animation: cardPopOut 0.22s cubic-bezier(0.4, 0, 1, 1) forwards;
+                }
+                @keyframes cardPopOut {
+                    from { transform: scale(1); opacity: 1; }
+                    to { transform: scale(0.94); opacity: 0; }
+                }
+                .overlay-name { font-size: 1.45rem; }
+                .story-overlay-info { bottom: 88px; padding: 0 16px; }
+                .overlay-actions {
+                    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+                    gap: 22px;
+                }
+                .overlay-actions .action-btn { width: 54px; height: 54px; font-size: 1.3rem; }
+            }
+            @media (max-width: 480px) {
+                .tinder-card {
+                    width: 94vw;
+                    max-width: 94vw;
+                }
+                .overlay-name { font-size: 1.3rem; }
+            }
+            /* Pantallas muy bajas en móvil: permitir que la tarjeta use el alto disponible */
+            @media (max-width: 768px) and (max-height: 640px) {
+                .tinder-card {
+                    aspect-ratio: auto;
+                    height: 100%;
                 }
             }
         `;
@@ -2979,54 +3100,132 @@ class DeseoApp {
         document.head.appendChild(style);
         document.body.appendChild(modal);
 
-        // Interacciones de fotos: thumbs, prev/next, gestos
+        // ===== Interacciones tipo Instagram Stories =====
         try {
-            const mainPhotoEl = modal.querySelector('#tinderMainPhoto');
-            const thumbEls = Array.from(modal.querySelectorAll('.thumbs .thumb'));
-            let currentIndex = 0;
+            const track = modal.querySelector('#storiesTrack');
+            const segments = Array.from(modal.querySelectorAll('.story-segment'));
+            const tapLeft = modal.querySelector('#storyTapLeft');
+            const tapRight = modal.querySelector('#storyTapRight');
+            const card = modal.querySelector('.tinder-card');
 
-            const setActiveIndex = (idx) => {
-                if (!displayProfile.photos || displayProfile.photos.length === 0) return;
-                currentIndex = (idx + displayProfile.photos.length) % displayProfile.photos.length;
-                const src = displayProfile.photos[currentIndex];
-                if (mainPhotoEl && typeof src === 'string') {
-                    mainPhotoEl.src = src;
-                }
-                thumbEls.forEach((t, i) => t.classList.toggle('active', i === currentIndex));
+            let storyIndex = 0;
+            const lastIndex = totalStories - 1;
+            const STORY_DURATION = 1000; // 1 segundo por foto
+            let autoTimer = null;
+
+            const renderStory = () => {
+                if (!track) return;
+                track.style.transform = `translateX(-${storyIndex * 100}%)`;
+                segments.forEach((seg, i) => {
+                    seg.classList.toggle('active', i === storyIndex);
+                    seg.classList.toggle('viewed', i < storyIndex);
+                });
             };
 
-            thumbEls.forEach((thumb, idx) => {
-                thumb.addEventListener('click', (e) => {
+            // Detener el temporizador de auto-avance
+            const stopAuto = () => {
+                if (autoTimer) { clearTimeout(autoTimer); autoTimer = null; }
+            };
+
+            // Programar el auto-avance (solo en slides de foto, no en la de info)
+            const scheduleAuto = () => {
+                stopAuto();
+                if (storyIndex < lastIndex) {
+                    autoTimer = setTimeout(() => {
+                        goNext();
+                    }, STORY_DURATION);
+                }
+            };
+
+            // Avanzar: si es la última slide, pasa a la SIGUIENTE PERSONA
+            const goNext = () => {
+                if (storyIndex < lastIndex) {
+                    storyIndex++;
+                    renderStory();
+                    scheduleAuto();
+                } else {
+                    // Última slide -> siguiente persona
+                    stopAuto();
+                    this.passToNextProfile();
+                }
+            };
+
+            // Retroceder: si es la primera slide, pasa a la PERSONA ANTERIOR
+            const goPrev = () => {
+                if (storyIndex > 0) {
+                    storyIndex--;
+                    renderStory();
+                    scheduleAuto();
+                } else {
+                    stopAuto();
+                    this.passToPreviousProfile();
+                }
+            };
+
+            // Tap izquierda / derecha
+            if (tapLeft) tapLeft.addEventListener('click', (e) => { e.stopPropagation(); goPrev(); });
+            if (tapRight) tapRight.addEventListener('click', (e) => { e.stopPropagation(); goNext(); });
+
+            // Click en segmentos de progreso para saltar a una slide
+            segments.forEach((seg, i) => {
+                seg.style.pointerEvents = 'auto';
+                seg.addEventListener('click', (e) => {
                     e.stopPropagation();
-                    setActiveIndex(idx);
+                    storyIndex = i;
+                    renderStory();
                 });
             });
 
-            const prevBtn = modal.querySelector('#tinderPrevPhoto');
-            const nextBtn = modal.querySelector('#tinderNextPhoto');
-            if (prevBtn) prevBtn.addEventListener('click', (e) => { e.stopPropagation(); setActiveIndex(currentIndex - 1); });
-            if (nextBtn) nextBtn.addEventListener('click', (e) => { e.stopPropagation(); setActiveIndex(currentIndex + 1); });
+            // ===== Gestos: swipe horizontal =====
+            // Deslizar SIEMPRE cambia de persona:
+            //   izquierda -> siguiente perfil
+            //   derecha   -> perfil anterior
+            // (el TAP en las zonas izquierda/derecha sigue cambiando de foto)
+            let startX = 0, startY = 0, isSwiping = false, moved = false;
+            const SWIPE_THRESHOLD = 45;
 
-            let startX = 0;
-            let isTouching = false;
-            const onTouchStart = (e) => { isTouching = true; startX = e.touches ? e.touches[0].clientX : e.clientX; };
-            const onTouchEnd = (e) => {
-                if (!isTouching) return;
-                const endX = e.changedTouches ? e.changedTouches[0].clientX : e.clientX;
-                const delta = endX - startX;
-                if (Math.abs(delta) > 40) {
-                    if (delta < 0) setActiveIndex(currentIndex + 1); else setActiveIndex(currentIndex - 1);
-                }
-                isTouching = false;
+            const onStart = (x, y) => { startX = x; startY = y; isSwiping = true; moved = false; };
+            const onMove = (x, y) => {
+                if (!isSwiping) return;
+                if (Math.abs(x - startX) > 8 || Math.abs(y - startY) > 8) moved = true;
             };
-            if (mainPhotoEl) {
-                mainPhotoEl.addEventListener('touchstart', onTouchStart, { passive: true });
-                mainPhotoEl.addEventListener('touchend', onTouchEnd);
-                mainPhotoEl.addEventListener('mousedown', onTouchStart);
-                mainPhotoEl.addEventListener('mouseup', onTouchEnd);
-            }
-            setActiveIndex(0);
-        } catch (err) { console.warn('Photo interactions init failed:', err); }
+            const onEnd = (x, y) => {
+                if (!isSwiping) return;
+                isSwiping = false;
+                const dx = x - startX;
+                const dy = y - startY;
+                // Solo gestos predominantemente horizontales
+                if (Math.abs(dx) > SWIPE_THRESHOLD && Math.abs(dx) > Math.abs(dy)) {
+                    stopAuto();
+                    if (dx < 0) {
+                        this.passToNextProfile(); // swipe izquierda -> siguiente persona
+                    } else {
+                        this.passToPreviousProfile(); // swipe derecha -> persona anterior
+                    }
+                }
+            };
+
+            const target = card || modal;
+            target.addEventListener('touchstart', (e) => {
+                const t = e.touches[0];
+                onStart(t.clientX, t.clientY);
+            }, { passive: true });
+            target.addEventListener('touchmove', (e) => {
+                const t = e.touches[0];
+                onMove(t.clientX, t.clientY);
+            }, { passive: true });
+            target.addEventListener('touchend', (e) => {
+                const t = e.changedTouches[0];
+                onEnd(t.clientX, t.clientY);
+            }, { passive: true });
+
+            // Soporte mouse (desktop) para arrastrar
+            target.addEventListener('mousedown', (e) => onStart(e.clientX, e.clientY));
+            target.addEventListener('mousemove', (e) => onMove(e.clientX, e.clientY));
+            target.addEventListener('mouseup', (e) => onEnd(e.clientX, e.clientY));
+
+            renderStory();
+        } catch (err) { console.warn('Stories interactions init failed:', err); }
     }
 
     async contactProfile(userId) {
@@ -3062,6 +3261,25 @@ class DeseoApp {
         }
     }
 
+    // ===== CERRAR MODAL TIPO TINDER =====
+    closeTinderModal() {
+        const modal = document.querySelector('.tinder-profile-modal');
+        if (!modal) return;
+        const card = modal.querySelector('.tinder-card');
+        const isMobile = window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
+
+        if (isMobile && card) {
+            // Animación suave de salida tipo bottom-sheet
+            card.classList.add('closing');
+            modal.style.transition = 'opacity 0.26s ease';
+            modal.style.opacity = '0';
+            setTimeout(() => modal.remove(), 260);
+        } else {
+            modal.style.animation = 'modalFadeOut 0.2s ease forwards';
+            setTimeout(() => modal.remove(), 180);
+        }
+    }
+
     // ===== NAVEGACIÓN ENTRE PERFILES =====
     passToNextProfile() {
         console.log('Pasando al siguiente perfil...');
@@ -3091,6 +3309,34 @@ class DeseoApp {
         
         // Show next profile
         this.showProfileDetails(nextProfile, nextIndex);
+    }
+
+    passToPreviousProfile() {
+        console.log('Pasando al perfil anterior...');
+        
+        const currentModal = document.querySelector('.tinder-profile-modal');
+        if (!currentModal) {
+            console.warn('No se encontró modal actual');
+            return;
+        }
+        
+        if (!this.availableProfiles || this.availableProfiles.length === 0) {
+            console.warn('No hay perfiles disponibles');
+            currentModal.remove();
+            return;
+        }
+        
+        // Calculate previous index (circular navigation)
+        const prevIndex = (this.currentProfileIndex - 1 + this.availableProfiles.length) % this.availableProfiles.length;
+        const prevProfile = this.availableProfiles[prevIndex];
+        
+        console.log(`Navegando del perfil ${this.currentProfileIndex} al ${prevIndex} (${prevProfile.userName})`);
+        
+        // Close current modal
+        currentModal.remove();
+        
+        // Show previous profile
+        this.showProfileDetails(prevProfile, prevIndex);
     }
 
     async createOrGetChat(userId) {
@@ -3351,7 +3597,7 @@ class DeseoApp {
             messageDiv.innerHTML = `
                 ${avatar}
                 <div class="message-content">
-                    <p>${msg.message}</p>
+                    <p>${escapeHtml(msg.message)}</p>
                     <small>${this.formatTime(msg.timestamp)}</small>
                 </div>
             `;
@@ -3575,11 +3821,11 @@ class DeseoApp {
             profileItem.className = 'wish-item profile-item';
             profileItem.innerHTML = `
                 <div class="wish-logo">
-                    <img src="${mainPhoto || 'https://www.gravatar.com/avatar/?d=mp&f=y'}" 
-                         alt="${nickname}" class="profile-avatar-small">
+                    <img src="${(typeof safeUrl==='function'?safeUrl(mainPhoto):mainPhoto) || 'https://www.gravatar.com/avatar/?d=mp&f=y'}" 
+                         alt="${escapeHtml(nickname)}" class="profile-avatar-small">
                 </div>
                 <div class="wish-info">
-                    <h3>${nickname}</h3>
+                    <h3>${escapeHtml(nickname)}</h3>
                     <p><span class="category-badge ${profile.category}">${this.getCategoryName(profile.category)}</span> • Disponible</p>
                 </div>
                 <div class="wish-actions">
@@ -3708,12 +3954,12 @@ class DeseoApp {
             const slide = document.createElement('div');
             slide.className = 'carousel-slide';
             slide.innerHTML = `
-                <div class="carousel-profile" data-profile-id="${profile.id}">
-                    <img src="${mainPhoto}" 
-                         alt="${profile.userName}" class="carousel-profile-avatar">
+                <div class="carousel-profile" data-profile-id="${escapeAttr(profile.id)}">
+                    <img src="${(typeof safeUrl==='function'?safeUrl(mainPhoto):mainPhoto)}" 
+                         alt="${escapeHtml(profile.userName)}" class="carousel-profile-avatar">
                     <div class="carousel-profile-info">
-                        <div class="carousel-profile-name">${profile.userName || 'Usuario'}</div>
-                        <div class="carousel-profile-category">${this.getCategoryName(profile.category)}</div>
+                        <div class="carousel-profile-name">${escapeHtml(profile.userName || 'Usuario')}</div>
+                        <div class="carousel-profile-category">${escapeHtml(this.getCategoryName(profile.category))}</div>
                         <div class="carousel-profile-status">
                             <i></i>
                             <span>Disponible ahora</span>
@@ -4123,33 +4369,43 @@ class DeseoApp {
         const mainNav = document.querySelector('.main-nav');
         const sidebarToggle = document.getElementById('sidebarToggle');
         
-        if (mainNav && sidebarToggle) {
-            const isHidden = mainNav.classList.contains('hidden');
-            const isMobile = window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
-            
-            if (isHidden) {
-                // Mostrar el menú
-                mainNav.classList.remove('hidden');
-                if (isMobile) {
-                    document.body.classList.add('mobile-menu-open');
-                    this.disableMapInteractions(); // Desactivar interacciones del mapa
-                    console.log('✅ Sidebar menu shown - móvil');
-                } else {
-                    console.log('✅ Sidebar menu shown - desktop');
-                }
-            } else {
-                // Ocultar el menú
-                mainNav.classList.add('hidden');
-                if (isMobile) {
-                    document.body.classList.remove('mobile-menu-open');
-                    this.enableMapInteractions(); // Reactivar interacciones del mapa
-                    console.log('✅ Sidebar menu hidden - móvil');
-                } else {
-                    console.log('✅ Sidebar menu hidden - desktop');
-                }
-            }
-        } else {
+        if (!mainNav || !sidebarToggle) {
             console.warn('⚠️ main-nav or sidebarToggle not found');
+            return;
+        }
+
+        const isMobile = window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
+        // En móvil el estado real lo manda body.mobile-menu-open; en desktop, la clase .hidden
+        const isOpen = isMobile
+            ? document.body.classList.contains('mobile-menu-open')
+            : !mainNav.classList.contains('hidden');
+
+        if (!isOpen) {
+            // Abrir menú
+            mainNav.classList.remove('hidden');
+            if (isMobile) {
+                // Medir la altura real del header para posicionar el menú justo debajo
+                const header = document.querySelector('.sidebar-header');
+                if (header) {
+                    const h = Math.round(header.getBoundingClientRect().height);
+                    document.documentElement.style.setProperty('--mobile-header-height', h + 'px');
+                }
+                document.body.classList.add('mobile-menu-open');
+                this.disableMapInteractions();
+            }
+            sidebarToggle.innerHTML = '<i class="fas fa-times"></i>';
+            sidebarToggle.setAttribute('aria-expanded', 'true');
+            console.log('✅ Sidebar menu shown');
+        } else {
+            // Cerrar menú
+            mainNav.classList.add('hidden');
+            if (isMobile) {
+                document.body.classList.remove('mobile-menu-open');
+                this.enableMapInteractions();
+            }
+            sidebarToggle.innerHTML = '<i class="fas fa-bars"></i>';
+            sidebarToggle.setAttribute('aria-expanded', 'false');
+            console.log('✅ Sidebar menu hidden');
         }
     }
 
