@@ -2613,17 +2613,18 @@ class DeseoApp {
                                 <div class="story-overlay-info">
                                     ${blocksPerPhoto[idx].map(b => b.html).join('')}
                                 </div>
-                                <!-- Acciones presentes en TODAS las fotos -->
-                                <div class="tinder-actions overlay-actions">
-                                    <button class="action-btn pass-btn" onclick="window.deseoApp.closeTinderModal()" title="Cerrar">
-                                        <i class="fas fa-times"></i>
-                                    </button>
-                                    <button class="action-btn contact-btn" onclick="window.deseoApp.contactProfile('${profile.userId}')" title="Contactar">
-                                        <i class="fas fa-comment"></i>
-                                    </button>
-                                </div>
                             </div>
                         `).join('')}
+                    </div>
+
+                    <!-- Acciones flotantes: FUERA del track, siempre encima -->
+                    <div class="tinder-actions overlay-actions" id="tinderOverlayActions">
+                        <button class="action-btn pass-btn" id="tinderCloseBtn" title="Cerrar">
+                            <i class="fas fa-times"></i>
+                        </button>
+                        <button class="action-btn contact-btn" id="tinderContactBtn" title="Contactar">
+                            <i class="fas fa-comment"></i>
+                        </button>
                     </div>
 
                     <!-- Botón cerrar -->
@@ -2955,7 +2956,7 @@ class DeseoApp {
                 left: 0;
                 right: 0;
                 bottom: 16px;
-                z-index: 25;
+                z-index: 100; /* POR ENCIMA de tap-zones (20) y progress (30) */
                 border-top: none;
                 background: none;
                 padding: 0;
@@ -3110,7 +3111,7 @@ class DeseoApp {
 
             let storyIndex = 0;
             const lastIndex = totalStories - 1;
-            const STORY_DURATION = 1000; // 1 segundo por foto
+            const STORY_DURATION = 2000; // 2 segundos por foto
             let autoTimer = null;
 
             const renderStory = () => {
@@ -3175,6 +3176,25 @@ class DeseoApp {
                     renderStory();
                 });
             });
+
+            // ===== Botones flotantes: stopPropagation para que las zonas
+            // de tap NO los intercepten =====
+            const closeBtn = modal.querySelector('#tinderCloseBtn');
+            const contactBtn = modal.querySelector('#tinderContactBtn');
+            if (closeBtn) {
+                closeBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    this.closeTinderModal();
+                });
+            }
+            if (contactBtn) {
+                contactBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    this.contactProfile(profile.userId);
+                });
+            }
 
             // ===== Gestos: swipe horizontal =====
             // Deslizar SIEMPRE cambia de persona:
