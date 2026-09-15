@@ -44,6 +44,12 @@ class InlineWalletManager {
     }
 
     getCurrentUserId() {
+        // SEGURIDAD: preferir la identidad verificada por Clerk sobre localStorage
+        // (que es manipulable). Fallback a la caché por compatibilidad.
+        if (window.DeseoSession) {
+            const verified = window.DeseoSession.getVerifiedUserId();
+            if (verified) return verified;
+        }
         const user = JSON.parse(localStorage.getItem('deseo_user') || '{}');
         return user.id || user.uid;
     }
@@ -331,7 +337,7 @@ class InlineWalletManager {
                 <div>
                     <strong>Transacción ${messageType}</strong>
                     <p style="margin: 5px 0 0 0; font-size: 14px; opacity: 0.9;">
-                        ${transaction.adminMessage ? transaction.adminMessage.substring(0, 50) + '...' : 'Tu transacción ha sido procesada.'}
+                        ${transaction.adminMessage ? escapeHtml(transaction.adminMessage.substring(0, 50) + '...') : 'Tu transacción ha sido procesada.'}
                     </p>
                 </div>
             </div>
@@ -424,7 +430,7 @@ class InlineWalletManager {
                         </div>
                         <h4 class="admin-message-title">${messageTitle}</h4>
                     </div>
-                    <p class="admin-message-content">${transaction.adminMessage}</p>
+                    <p class="admin-message-content">${escapeHtml(transaction.adminMessage)}</p>
                     ${transaction.adminActionDate ? `
                         <div class="admin-message-date">
                             <i class="fas fa-calendar"></i>
@@ -442,8 +448,8 @@ class InlineWalletManager {
             bankInfoHtml = `
                 <div class="bank-info">
                     <p><strong>Banco:</strong> ${bankName}</p>
-                    <p><strong>Cuenta:</strong> ${transaction.accountNumber}</p>
-                    <p><strong>Titular:</strong> ${transaction.accountHolder}</p>
+                    <p><strong>Cuenta:</strong> ${escapeHtml(transaction.accountNumber)}</p>
+                    <p><strong>Titular:</strong> ${escapeHtml(transaction.accountHolder)}</p>
                 </div>
             `;
         }
@@ -454,9 +460,9 @@ class InlineWalletManager {
                     <i class="${iconClass}"></i>
                 </div>
                 <div class="transaction-details">
-                    <h4>${transaction.description || 'Transacción'}${statusBadge}</h4>
+                    <h4>${escapeHtml(transaction.description || 'Transacción')}${statusBadge}</h4>
                     <p>${transaction.method || 'Método'} • ${this.formatDate(transaction.timestamp || transaction.date || new Date().toISOString())}</p>
-                    ${transaction.nequiNumber ? `<p style=\"font-size: 12px; color: #666;\">Nequi: ${transaction.nequiNumber}</p>` : ''}
+                    ${transaction.nequiNumber ? `<p style=\"font-size: 12px; color: #666;\">Nequi: ${escapeHtml(transaction.nequiNumber)}</p>` : ''}
                     ${bankInfoHtml}
                     ${adminMessageHtml}
                 </div>
@@ -570,10 +576,10 @@ class InlineWalletManager {
             const color = m.direction === 'in' ? '#4CAF50' : '#f44336';
             item.innerHTML = `
                 <div class="transaction-info">
-                    <div class="transaction-title">Mensaje (${m.reason})</div>
+                    <div class="transaction-title">Mensaje (${escapeHtml(m.reason)})</div>
                     <div class="transaction-date">${this.formatDate(m.timestamp)}</div>
                 </div>
-                <div class="transaction-amount" style="color:${color};">${sign}${m.amount}</div>
+                <div class="transaction-amount" style="color:${color};">${sign}${escapeInt(m.amount, m.amount)}</div>
             `;
             container.appendChild(item);
         });
@@ -999,9 +1005,13 @@ class InlineWalletManager {
             });
             
             // Guardar balance del usuario
+            // SEGURIDAD: NO escribir `balance` desde memoria del cliente. Antes se
+            // hacía `update({ balance: this.balance })`, lo que sobrescribía el saldo
+            // real (last-writer-wins) y permitía manipularlo. El saldo SOLO se
+            // modifica mediante operaciones atómicas (DeseoMoney.charge/credit) o
+            // desde el backend al aprobar una transacción.
             const userRef = this.database.ref(`users/${userId}`);
             await userRef.update({
-                balance: this.balance,
                 lastUpdated: new Date().toISOString()
             });
             
@@ -1096,7 +1106,7 @@ class InlineWalletManager {
             
             // Crear transacción de retiro pendiente de aprobación
             const transaction = {
-                id: Date.now(),
+                id: `wd_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
                 type: 'outcome',
                 amount: amount,
                 description: `Retiro a ${this.getBankDisplayName(bank)}`,
@@ -1108,8 +1118,12 @@ class InlineWalletManager {
                 adminMessage: null
             };
             
-            // Guardar en Firebase para que el admin pueda aprobarlo
-            await this.saveWithdrawalRequest(transaction);
+            const selectedBank = bank;
+            // Guardar en Firebase y RESERVAR los fondos de forma atómica.
+            await this.saveWithdrawalRequest(transaction, selectedBank);
+            
+            // Refrescar saldo mostrado tras la reserva.
+            await this.loadBalance();
             
             this.closeModal('withdrawModal');
             document.getElementById('withdrawForm').reset();
@@ -1132,7 +1146,7 @@ class InlineWalletManager {
         return banks[bankCode] || bankCode;
     }
     
-    async saveWithdrawalRequest(transaction) {
+    async saveWithdrawalRequest(transaction, selectedBank) {
         if (!this.database) {
             throw new Error('Firebase no disponible');
         }
@@ -1142,11 +1156,36 @@ class InlineWalletManager {
             throw new Error('Usuario no autenticado');
         }
         
-        // Guardar la transacción en Firebase para que el admin la vea
-        const transactionRef = this.database.ref(`transactions/${userId}/${transaction.id}`);
-        await transactionRef.set(transaction);
+        // SEGURIDAD (anti double-spend): reservar los fondos ANTES de registrar la
+        // solicitud, de forma atómica. Antes solo se descontaba al aprobar el admin,
+        // permitiendo solicitar varios retiros con el mismo saldo.
+        if (!window.DeseoMoney) {
+            throw new Error('Servicio de pagos no disponible. Recarga la página.');
+        }
+        const reserve = await window.DeseoMoney.reserve(
+            this.database,
+            userId,
+            parseInt(transaction.amount, 10),
+            { reason: 'withdrawal_reserve', opId: transaction.id }
+        );
+        if (!reserve.ok) {
+            if (reserve.reason === 'insufficient_funds') {
+                throw new Error('Fondos insuficientes');
+            }
+            throw new Error('No se pudo reservar el saldo. Intenta de nuevo.');
+        }
         
-        console.log('✅ Solicitud de retiro guardada en Firebase');
+        // Guardar la transacción en Firebase para que el admin la vea.
+        // `fundsReserved: true` indica que el saldo ya fue descontado.
+        const tx = Object.assign({}, transaction, {
+            fundsReserved: true,
+            reservedAt: new Date().toISOString(),
+            bank: selectedBank || transaction.method
+        });
+        const transactionRef = this.database.ref(`transactions/${userId}/${transaction.id}`);
+        await transactionRef.set(tx);
+        
+        console.log('✅ Solicitud de retiro guardada y fondos reservados');
     }
 
     showAddMoneyModal() {

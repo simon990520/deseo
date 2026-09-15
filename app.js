@@ -350,7 +350,7 @@ class DeseoApp {
         notification.innerHTML = `
             <div class="notification-content">
                 <i class="fas fa-${this.getNotificationIcon(type)}"></i>
-                <span>${message}</span>
+                <span>${escapeHtml(message)}</span>
             </div>
         `;
 

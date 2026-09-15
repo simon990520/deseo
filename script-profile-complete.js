@@ -161,8 +161,8 @@ class ProfileCompleteManager {
             poseItem.className = 'pose-item';
             poseItem.innerHTML = `
                 <input type="checkbox" id="pose_${pose.id}" value="${pose.id}" class="pose-checkbox">
-                <div class="pose-name">${pose.name}</div>
-                <div class="pose-description">${pose.description}</div>
+                <div class="pose-name">${escapeHtml(pose.name)}</div>
+                <div class="pose-description">${escapeHtml(pose.description)}</div>
             `;
             
             posesGrid.appendChild(poseItem);
@@ -631,7 +631,7 @@ class ProfileCompleteManager {
         
         notification.innerHTML = `
             <i class="fas fa-${icon}"></i>
-            <span>${message}</span>
+            <span>${escapeHtml(message)}</span>
         `;
         
         container.appendChild(notification);

@@ -152,7 +152,7 @@ class AuthManager {
             
             // Actualizar avatar si hay foto
             if (this.currentUser.profile?.photoURL) {
-                userAvatar.innerHTML = `<img src="${this.currentUser.profile.photoURL}" alt="Avatar" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;">`;
+                userAvatar.innerHTML = `<img src="${safeUrl(this.currentUser.profile.photoURL)}" alt="Avatar" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;">`;
             }
         }
     }
@@ -191,7 +191,22 @@ class AuthManager {
     async signInWithEmailLocal(email, password) {
         // Simular autenticación local
         const users = JSON.parse(localStorage.getItem('deseo_users') || '[]');
-        const user = users.find(u => u.email === email && u.password === password);
+        // Verificar con hash (soporta migración de contraseñas en texto plano)
+        let user = null;
+        for (const u of users) {
+            if (u.email !== email) continue;
+            const ok = (typeof verifyPassword === 'function')
+                ? await verifyPassword(password, u.password)
+                : (u.password === password);
+            if (ok) {
+                user = u;
+                if (typeof isHashed === 'function' && !isHashed(u.password) && typeof hashPassword === 'function') {
+                    u.password = await hashPassword(password);
+                    localStorage.setItem('deseo_users', JSON.stringify(users));
+                }
+                break;
+            }
+        }
         
         if (!user) {
             throw new Error('Credenciales incorrectas');
@@ -268,7 +283,7 @@ class AuthManager {
         const newUser = {
             uid: Date.now().toString(),
             email: email,
-            password: password, // En producción esto debería estar hasheado
+            password: (typeof hashPassword === 'function') ? await hashPassword(password) : password,
             fullName: userData.fullName,
             address: userData.address,
             gender: userData.gender,

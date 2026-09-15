@@ -91,6 +91,15 @@ class ChatClient {
 
     async loadCurrentUser() {
         try {
+            // SEGURIDAD: preferir la identidad verificada por Clerk sobre localStorage.
+            if (window.DeseoSession) {
+                const verified = window.DeseoSession.getUser();
+                if (verified && verified.verified) {
+                    this.currentUser = verified;
+                    this.currentUserAlias = await this.getAliasForUser(this.currentUser.id);
+                    return;
+                }
+            }
             const userData = localStorage.getItem('deseo_user');
             if (!userData) {
                 throw new Error('Usuario no autenticado');
@@ -185,16 +194,11 @@ class ChatClient {
     // Eliminado: el cliente no ve balance
 
     setupEventListeners() {
-        console.log('🔍 [DEBUG] setupEventListeners called');
-        console.log('🔍 [DEBUG] DOM ready state:', document.readyState);
-        console.log('🔍 [DEBUG] Document body:', document.body);
         
         // Botón de envío
         const sendBtn = document.getElementById('sendBtn');
         const messageInput = document.getElementById('messageInput');
         
-        console.log('🔍 [DEBUG] sendBtn found:', sendBtn);
-        console.log('🔍 [DEBUG] messageInput found:', messageInput);
         
         if (sendBtn) {
             sendBtn.addEventListener('click', () => this.sendMessage());
@@ -212,7 +216,6 @@ class ChatClient {
 
         // Botones de acción rápida
         const quickActions = document.querySelectorAll('.quick-action-btn');
-        console.log('🔍 [DEBUG] Found quick action buttons:', quickActions.length);
         
         quickActions.forEach((btn, index) => {
             console.log(`🔍 [DEBUG] Button ${index}:`, btn, 'action:', btn.dataset.action);
@@ -222,17 +225,13 @@ class ChatClient {
                 e.preventDefault();
                 e.stopPropagation();
                 const action = btn.dataset.action;
-                console.log('🔍 [DEBUG] Button onclick triggered:', action);
-                
+                        
                 // SOLUCIÓN DIRECTA SIN MÉTODOS COMPLEJOS
                 if (action === 'tip') {
-                    console.log('🔍 [DEBUG] Opening tip modal with onclick');
-                    const modal = document.getElementById('tipModal');
-                    console.log('🔍 [DEBUG] Modal found:', modal);
-                    if (modal) {
+                                const modal = document.getElementById('tipModal');
+                                if (modal) {
                         modal.style.cssText = 'display: block !important; visibility: visible !important; opacity: 1 !important; z-index: 9999 !important; position: fixed !important; top: 0 !important; left: 0 !important; width: 100% !important; height: 100% !important; background: rgba(0,0,0,0.5) !important;';
-                        console.log('🔍 [DEBUG] Modal CSS applied');
-                    } else {
+                                    } else {
                         console.error('❌ Modal not found!');
                     }
                 }
@@ -281,64 +280,47 @@ class ChatClient {
     }
 
     testButtonFunctionality() {
-        console.log('🔍 [DEBUG] Testing button functionality...');
         const tipBtn = document.querySelector('[data-action="tip"]');
-        console.log('🔍 [DEBUG] Tip button found:', tipBtn);
         if (tipBtn) {
-            console.log('🔍 [DEBUG] Tip button dataset:', tipBtn.dataset);
-            console.log('🔍 [DEBUG] Tip button onclick:', tipBtn.onclick);
-        }
+                }
         
         // Verificar si el modal existe
         const tipModal = document.getElementById('tipModal');
-        console.log('🔍 [DEBUG] Tip modal found:', tipModal);
         if (tipModal) {
-            console.log('🔍 [DEBUG] Tip modal display:', tipModal.style.display);
-            console.log('🔍 [DEBUG] Tip modal computed display:', window.getComputedStyle(tipModal).display);
-        }
+                }
         
         // Verificar todos los modales
         const allModals = document.querySelectorAll('.modal');
-        console.log('🔍 [DEBUG] All modals found:', allModals.length);
         allModals.forEach((modal, index) => {
             console.log(`🔍 [DEBUG] Modal ${index}:`, modal.id, modal);
         });
     }
 
     setupModalListeners() {
-        console.log('🔍 [DEBUG] Setting up modal listeners...');
         
         // Modal de propina
         const sendTipBtn = document.getElementById('sendTipBtn');
-        console.log('🔍 [DEBUG] sendTipBtn found:', sendTipBtn);
         if (sendTipBtn) {
             sendTipBtn.addEventListener('click', () => this.sendTip());
-            console.log('🔍 [DEBUG] sendTipBtn listener added');
-        }
+            }
 
         // Modal de solicitar servicio
         const sendRequestServiceBtn = document.getElementById('sendRequestServiceBtn');
-        console.log('🔍 [DEBUG] sendRequestServiceBtn found:', sendRequestServiceBtn);
         if (sendRequestServiceBtn) {
             sendRequestServiceBtn.addEventListener('click', () => this.sendRequestService());
-            console.log('🔍 [DEBUG] sendRequestServiceBtn listener added');
-        }
+            }
 
         // Modal de reportar
         const sendReportBtn = document.getElementById('sendReportBtn');
-        console.log('🔍 [DEBUG] sendReportBtn found:', sendReportBtn);
         if (sendReportBtn) {
             sendReportBtn.addEventListener('click', () => this.sendReport());
-            console.log('🔍 [DEBUG] sendReportBtn listener added');
-        }
+            }
 
         // Modal de calificar
         const sendRateBtn = document.getElementById('sendRateBtn');
-        console.log('🔍 [DEBUG] sendRateBtn found:', sendRateBtn);
         if (sendRateBtn) {
             sendRateBtn.addEventListener('click', () => this.sendRating());
-            console.log('🔍 [DEBUG] sendRateBtn listener added');
-        }
+            }
 
         // Preview de imágenes en reporte
         const reportImages = document.getElementById('reportImages');
@@ -398,8 +380,7 @@ class ChatClient {
                     
                     // Force check for evidence request if admin message
                     if (message.senderId === 'admin') {
-                        console.log('🔍 [DEBUG] Mensaje de admin detectado, verificando botón de evidencias...');
-                        setTimeout(() => this.checkForEvidenceRequest(), 100);
+                                        setTimeout(() => this.checkForEvidenceRequest(), 100);
                         setTimeout(() => this.checkForEvidenceRequest(), 500);
                     }
                     
@@ -407,8 +388,7 @@ class ChatClient {
                     if (message.senderId !== this.currentUser.id && 
                         message.senderId !== 'system' && 
                         message.senderName) {
-                        console.log('🔍 [DEBUG] Nuevo mensaje recibido en chat-client:', message);
-                        this.sendBrowserNotification(message.senderName, message.message);
+                                        this.sendBrowserNotification(message.senderName, message.message);
                     }
                 }
             });
@@ -466,16 +446,18 @@ class ChatClient {
         if (!message || !this.database || !this.chatId) return;
 
         try {
-            // Cobro por mensaje de cliente: 100
-            const canCharge = await this.chargeClient(390, 'message');
-            if (!canCharge) {
-                this.showError('Saldo insuficiente para enviar mensaje.');
-                return;
-            }
-            // Acreditar al proveedor y registrar microtransacción
-            await this.creditProvider(100, 'message');
+            const CLIENT_COST = 390;   // lo que paga el cliente por mensaje
+            const PROVIDER_CREDIT = 100; // lo que recibe el proveedor
+            // La diferencia (290) queda como comisión de plataforma y se registra
+            // explícitamente para que sea auditable (antes no tenía destino).
+            const PLATFORM_FEE = CLIENT_COST - PROVIDER_CREDIT;
+
+            // 1) Crear/persistir el mensaje con una push key única (evita colisiones Date.now).
+            const tempRef = this.database.ref(`chats/${this.chatId}/messages`).push();
+            const messageId = tempRef.key;
+            const opId = `msg_${this.chatId}_${messageId}`;
             const messageData = {
-                id: Date.now().toString(),
+                id: messageId,
                 senderId: this.currentUser.id,
                 senderName: this.currentUserAlias || this.currentUser.name,
                 message: message,
@@ -483,9 +465,25 @@ class ChatClient {
                 type: 'text'
             };
 
-            // Guardar mensaje en Firebase
-            const messagesRef = this.database.ref(`chats/${this.chatId}/messages/${messageData.id}`);
-            await messagesRef.set(messageData);
+            // 2) Cobrar al cliente de forma atómica e idempotente (solo tras crear el id).
+            const canCharge = await this.chargeClient(CLIENT_COST, 'message', opId + '_out');
+            if (!canCharge) {
+                this.showError('Saldo insuficiente para enviar mensaje.');
+                return;
+            }
+
+            // 3) Acreditar al proveedor y registrar comisión de plataforma.
+            await this.creditProvider(PROVIDER_CREDIT, 'message', opId + '_in');
+            try {
+                await this.database.ref(`platform_fees/${opId}`).set({
+                    id: opId, chatId: this.chatId, from: this.currentUser.id,
+                    amount: PLATFORM_FEE, currency: 'COP',
+                    source: 'chat_message', timestamp: new Date().toISOString()
+                });
+            } catch (_) { /* la comisión es informativa; no bloquea el envío */ }
+
+            // 4) Persistir el mensaje ya cobrado.
+            await tempRef.set(messageData);
 
             // Limpiar input
             messageInput.value = '';
@@ -499,32 +497,6 @@ class ChatClient {
         } catch (error) {
             console.error('❌ Error enviando mensaje:', error);
             this.showError('Error enviando mensaje');
-        }
-    }
-
-    async sendTip() {
-        const amountEl = document.getElementById('tipAmount');
-        const noteEl = document.getElementById('tipNote');
-        const amount = parseInt(amountEl && amountEl.value ? amountEl.value : '0', 10);
-        const note = noteEl && noteEl.value ? noteEl.value.trim() : '';
-        if (!amount || amount <= 0) { this.showError('Monto inválido'); return; }
-        if (!this.database || !this.chatId) return;
-        try {
-            const ok = await this.chargeClient(amount, 'tip');
-            if (!ok) { this.showError('Saldo insuficiente para propina.'); return; }
-            const messageData = {
-                id: `tip_${Date.now()}`,
-                senderId: this.currentUser.id,
-                senderName: this.currentUserAlias || this.currentUser.name,
-                message: `Propina enviada: ${amount} pesos${note ? ' - ' + note : ''}`,
-                timestamp: new Date().toISOString(),
-                type: 'tip',
-                amount: amount
-            };
-            await this.database.ref(`chats/${this.chatId}/messages/${messageData.id}`).set(messageData);
-            this.closeModalSafe('tipModal');
-        } catch (e) {
-            console.error('❌ Error enviando propina:', e);
         }
     }
 
@@ -547,6 +519,11 @@ class ChatClient {
                 description: description.trim(),
                 budget: budget,
                 when,
+                // Texto legible para render genérico, notificaciones y compatibilidad.
+                message: `Solicitud de servicio: ${title.trim()}` +
+                    (description.trim() ? `\n${description.trim()}` : '') +
+                    (budget ? `\nPresupuesto: $${budget.toLocaleString('es-CO')}` : '') +
+                    (when ? `\nCuándo: ${when}` : ''),
                 timestamp: new Date().toISOString()
             };
             await this.database.ref(`chats/${this.chatId}/messages/${reqId}`).set(payload);
@@ -557,20 +534,16 @@ class ChatClient {
     }
 
     async handleQuickAction(action) {
-        console.log('🔍 [DEBUG] handleQuickAction called with action:', action);
         
         // IMPLEMENTACIÓN DIRECTA - SIN SWITCH COMPLEJO
         if (action === 'tip') {
-            console.log('🔍 [DEBUG] Opening tip modal DIRECTLY');
-            const modal = document.getElementById('tipModal');
-            console.log('🔍 [DEBUG] Modal element:', modal);
-            if (modal) {
+                const modal = document.getElementById('tipModal');
+                if (modal) {
                 modal.style.display = 'block';
                 modal.style.visibility = 'visible';
                 modal.style.opacity = '1';
                 modal.style.zIndex = '9999';
-                console.log('🔍 [DEBUG] Modal forced to show');
-            } else {
+                    } else {
                 console.error('❌ Modal not found!');
             }
             return;
@@ -619,7 +592,6 @@ class ChatClient {
             return;
         }
         
-        console.log('🔍 [DEBUG] Unknown action:', action);
     }
 
     async toggleFavorite(state) {
@@ -797,35 +769,25 @@ class ChatClient {
         }
     }
 
-    // Simulación de cobro contra saldo del cliente (placeholder)
-    async chargeClient(amount, reason) {
+    // Cobro contra saldo del cliente — ATÓMICO e idempotente vía DeseoMoney.
+    async chargeClient(amount, reason, opId) {
         try {
-            // Ajuste al path real usado en la app: users/{id}/balance
-            const balanceRef = this.database.ref(`users/${this.currentUser.id}/balance`);
-            const snap = await balanceRef.once('value');
-            const current = parseInt(snap.val() || '0', 10);
-            if (current < amount) return false;
-            await balanceRef.set(current - amount);
-            const txId = `tx_${Date.now()}`;
-            // Transacción general (si se usa)
-            await this.database.ref(`users/${this.currentUser.id}/transactions/${txId}`).set({
-                id: txId,
-                type: 'debit',
-                reason,
-                amount,
-                timestamp: new Date().toISOString()
-            });
-            // Microtransacción
-            const microId = `micro_${Date.now()}`;
-            await this.database.ref(`users/${this.currentUser.id}/microtransactions/${microId}`).set({
-                id: microId,
-                direction: 'out',
-                reason,
-                amount,
+            const amt = parseInt(amount, 10);
+            if (!Number.isFinite(amt) || amt <= 0) return false;
+            if (!window.DeseoMoney) {
+                console.error('❌ DeseoMoney no disponible; abortando cobro por seguridad.');
+                return false;
+            }
+            const res = await window.DeseoMoney.charge(this.database, this.currentUser.id, amt, {
+                reason: reason,
                 to: this.otherUserId,
                 chatId: this.chatId,
-                timestamp: new Date().toISOString()
+                opId: opId
             });
+            if (!res.ok) {
+                console.warn('⚠️ Cobro no aplicado:', res.reason);
+                return false;
+            }
             return true;
         } catch (e) {
             console.error('❌ Error cobrando al cliente:', e);
@@ -833,22 +795,20 @@ class ChatClient {
         }
     }
 
-    async creditProvider(amount, reason) {
+    async creditProvider(amount, reason, opId) {
         try {
             if (!this.otherUserId) return;
-            const balanceRef = this.database.ref(`users/${this.otherUserId}/balance`);
-            const snap = await balanceRef.once('value');
-            const current = parseInt(snap.val() || '0', 10);
-            await balanceRef.set(current + amount);
-            const microId = `micro_${Date.now()}`;
-            await this.database.ref(`users/${this.otherUserId}/microtransactions/${microId}`).set({
-                id: microId,
-                direction: 'in',
-                reason,
-                amount,
+            const amt = parseInt(amount, 10);
+            if (!Number.isFinite(amt) || amt <= 0) return;
+            if (!window.DeseoMoney) {
+                console.error('❌ DeseoMoney no disponible; abortando crédito por seguridad.');
+                return;
+            }
+            await window.DeseoMoney.credit(this.database, this.otherUserId, amt, {
+                reason: reason,
                 from: this.currentUser.id,
                 chatId: this.chatId,
-                timestamp: new Date().toISOString()
+                opId: opId
             });
         } catch (e) {
             console.error('❌ Error acreditando al proveedor:', e);
@@ -856,18 +816,10 @@ class ChatClient {
     }
 
     openModal(id) {
-        console.log('🔍 [DEBUG] openModal called with id:', id);
         const el = document.getElementById(id);
-        console.log('🔍 [DEBUG] Modal element found:', el);
-        console.log('🔍 [DEBUG] Modal element style before:', el ? el.style.display : 'N/A');
         if (el) {
             el.style.display = 'block';
-            console.log('🔍 [DEBUG] Modal element style after:', el.style.display);
-            console.log('🔍 [DEBUG] Modal computed style:', window.getComputedStyle(el).display);
-            console.log('🔍 [DEBUG] Modal z-index:', window.getComputedStyle(el).zIndex);
-            console.log('🔍 [DEBUG] Modal position:', window.getComputedStyle(el).position);
-            console.log('🔍 [DEBUG] Modal displayed successfully');
-            
+                                
             // Forzar visibilidad
             el.style.visibility = 'visible';
             el.style.opacity = '1';
@@ -887,15 +839,17 @@ class ChatClient {
         }
         
         try {
-            // Cobrar al cliente
-            const charged = await this.chargeClient(amount, 'Propina');
+            // Operación única e idempotente: la propina es una transferencia.
+            const opId = `tip_${this.chatId}_${Date.now()}_${Math.random().toString(36).slice(2,9)}`;
+            // Cobrar al cliente (atómico)
+            const charged = await this.chargeClient(amount, 'Propina', opId + '_out');
             if (!charged) {
                 this.showError('Saldo insuficiente para enviar propina');
                 return;
             }
             
-            // Acreditar al proveedor
-            await this.creditProvider(amount, 'Propina recibida');
+            // Acreditar al proveedor (atómico, mismo opId)
+            await this.creditProvider(amount, 'Propina recibida', opId + '_in');
             
             // Enviar mensaje de propina
             const tipMessage = `💰 **PROPINA ENVIADA**\n\n` +
@@ -945,9 +899,6 @@ class ChatClient {
         }, 3000);
     }
 
-    showError(message) {
-        this.showNotification(message, 'error');
-    }
 
     handleTyping() {
         if (!this.database || !this.chatId) return;
@@ -1045,6 +996,27 @@ class ChatClient {
             } else if (message.type === 'service_offer' && !isSent) {
                 // Oferta de encuentro del proveedor - mostrar con botones aceptar/rechazar
                 messageHtml = this.createEncounterOfferHTML(message);
+            } else if (message.type === 'service_offer' && isSent) {
+                // Oferta ya enviada por mí: tarjeta informativa (sin botones)
+                messageHtml = `<div class="encounter-offer sent-offer">
+                    <div class="offer-header"><h4>💼 Oferta de servicio enviada</h4></div>
+                    <div class="offer-details">
+                        <p><strong>Precio:</strong> $${(message.price || 0).toLocaleString('es-CO')} pesos</p>
+                        ${message.description ? `<p><strong>Descripción:</strong> ${this.escapeHtml(message.description)}</p>` : ''}
+                        ${message.time ? `<p><strong>Tiempo:</strong> ${this.escapeHtml(message.time)}</p>` : ''}
+                    </div>
+                </div>`;
+            } else if (message.type === 'service_request') {
+                // Solicitud de servicio (enviada o recibida)
+                messageHtml = `<div class="service-request-card">
+                    <div class="offer-header"><h4>🛠️ ${isSent ? 'Solicitud enviada' : 'Solicitud de servicio'}</h4></div>
+                    <div class="offer-details">
+                        <p><strong>Título:</strong> ${this.escapeHtml(message.title || '')}</p>
+                        ${message.description ? `<p><strong>Detalles:</strong> ${this.escapeHtml(message.description)}</p>` : ''}
+                        ${message.budget ? `<p><strong>Presupuesto:</strong> $${Number(message.budget).toLocaleString('es-CO')}</p>` : ''}
+                        ${message.when ? `<p><strong>Cuándo:</strong> ${this.escapeHtml(message.when)}</p>` : ''}
+                    </div>
+                </div>`;
             } else if (message.type === 'tips_request' && !isSent) {
                 // Solicitud de propina del proveedor
                 messageHtml = `<div class="tips-request">
@@ -1205,9 +1177,10 @@ class ChatClient {
         let photosHtml = '<h3>📸 Fotos desbloqueadas</h3><div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">';
         
         images.forEach((imageData, index) => {
+            const safeSrc = (typeof safeUrl === 'function') ? safeUrl(imageData) : '';
             photosHtml += `
                 <div style="text-align: center;">
-                    <img src="${imageData}" style="width: 100%; max-width: 200px; height: 200px; object-fit: cover; border-radius: 8px;" alt="Foto ${index + 1}">
+                    <img src="${safeSrc}" style="width: 100%; max-width: 200px; height: 200px; object-fit: cover; border-radius: 8px;" alt="Foto ${index + 1}">
                     <p>Foto ${index + 1}</p>
                 </div>
             `;
@@ -1231,15 +1204,19 @@ class ChatClient {
                 const offer = snapshot.val();
                 
                 if (offer) {
-                    // Cobrar al cliente y crear ORDEN EN ESCROW (sin acreditar al proveedor aún)
-                    const canCharge = await this.chargeClient(offer.price, 'encounter_escrow');
+                    // Id de orden único PRIMERO (para usarlo como opId idempotente del escrow).
+                    const orderId = `order_${Date.now()}_${Math.random().toString(36).slice(2,9)}`;
+                    const escrowOpId = `escrow_${this.chatId}_${orderId}`;
+
+                    // Cobrar al cliente y crear ORDEN EN ESCROW (sin acreditar al proveedor aún).
+                    // La operación es atómica e idempotente (no se puede cobrar dos veces el mismo escrow).
+                    const canCharge = await this.chargeClient(offer.price, 'encounter_escrow', escrowOpId);
                     if (!canCharge) {
                         this.showError('Saldo insuficiente para aceptar la oferta.');
                         return;
                     }
 
                     // Crear orden de encuentro en escrow
-                    const orderId = `order_${Date.now()}`;
                     const orderData = {
                         id: orderId,
                         chatId: this.chatId,
@@ -1250,6 +1227,7 @@ class ChatClient {
                         description: offer.description || '',
                         time: offer.time || '',
                         escrowAmount: offer.price || 0,
+                        escrowOpId: escrowOpId,
                         status: 'escrowed', // escrowed | completed | disputed | cancelled
                         clientConfirmed: false,
                         providerConfirmed: false,
@@ -1395,8 +1373,10 @@ class ChatClient {
     }
 
     async releaseEscrow(order) {
-        // Acreditar al proveedor el monto en garantía y registrar microtransacciones
-        await this.creditProvider(order.escrowAmount, 'encounter_release');
+        // Acreditar al proveedor el monto en garantía, de forma atómica e idempotente
+        // (opId basado en el escrow: evita doble liberación si se reintenta).
+        const opId = `release_${order.escrowOpId || order.id}`;
+        await this.creditProvider(order.escrowAmount, 'encounter_release', opId);
     }
 
     async sendCompletionMessage(order) {
@@ -1551,23 +1531,6 @@ class ChatClient {
         const reason = prompt('Describe el problema con el encuentro:', 'El encuentro no se realizó correctamente');
         if (reason) {
             await this.raiseDispute(orderId, reason);
-        }
-    }
-
-    handleQuickAction(action) {
-        switch (action) {
-            case 'urgent':
-                this.markAsUrgent();
-                break;
-            case 'modify':
-                this.openModifyModal();
-                break;
-            case 'cancel':
-                this.openCancelModal();
-                break;
-            case 'rate':
-                this.openRateModal();
-                break;
         }
     }
 
@@ -1727,18 +1690,27 @@ class ChatClient {
 
         // Solo cobrar para mensajes que requieren pago (urgent, service_request)
         const paidMessageTypes = ['urgent', 'service_request'];
+        const payOpId = `special_${this.chatId}_${Date.now()}_${Math.random().toString(36).slice(2,9)}`;
         if (paidMessageTypes.includes(type)) {
-            const canCharge = await this.chargeClient(390, type || 'message');
+            const canCharge = await this.chargeClient(390, type || 'message', payOpId + '_out');
             if (!canCharge) {
                 this.showError('Saldo insuficiente para enviar mensaje.');
                 return;
             }
-            // Acreditar al proveedor
-            await this.creditProvider(100, type || 'message');
+            // Acreditar al proveedor (mismo opId)
+            await this.creditProvider(100, type || 'message', payOpId + '_in');
+            // Registrar comisión de plataforma (390 - 100 = 290) para auditoría.
+            try {
+                await this.database.ref(`platform_fees/${payOpId}`).set({
+                    id: payOpId, chatId: this.chatId, from: this.currentUser.id,
+                    amount: 290, currency: 'COP', source: 'chat_' + (type || 'message'),
+                    timestamp: new Date().toISOString()
+                });
+            } catch (_) { /* informativo */ }
         }
 
         const messageData = {
-            id: Date.now().toString(),
+            id: this.database.ref(`chats/${this.chatId}/messages`).push().key,
             senderId: this.currentUser.id,
             senderName: this.currentUserAlias || this.currentUser.name,
             message: message,
@@ -1865,7 +1837,7 @@ class ChatClient {
                 <i class="fas fa-exclamation-triangle" style="font-size: 18px;"></i>
                 <div>
                     <strong>Error</strong>
-                    <p style="margin: 5px 0 0 0; font-size: 14px; opacity: 0.9;">${message}</p>
+                    <p style="margin: 5px 0 0 0; font-size: 14px; opacity: 0.9;">${this.escapeHtml(message)}</p>
                 </div>
             </div>
         `;
@@ -1921,9 +1893,7 @@ class ChatClient {
 
     // ===== NOTIFICACIONES =====
     async initializeNotifications() {
-        console.log('🔍 [DEBUG] Inicializando notificaciones en chat-client...');
         this.notificationPermission = await this.requestNotificationPermission();
-        console.log('🔍 [DEBUG] Permisos de notificación:', this.notificationPermission);
     }
 
     async requestNotificationPermission() {

@@ -399,6 +399,7 @@ body {
 .publish-section {
     padding: 1rem 1.5rem;
     border-bottom: 1px solid var(--border-color);
+    display: none; /* Oculto en escritorio (el botón Publicarme se mueve al menú móvil) */
 }
 
 .btn-publish {
@@ -1383,6 +1384,23 @@ body {
         border: none;
         z-index: 10001; /* por encima del mapa */
         pointer-events: none; /* desactivar clicks por defecto */
+        /* CRÍTICO: backdrop-filter / isolation / transform crean un "containing
+           block" que atrapa a los hijos con position:fixed (el menú .main-nav).
+           Los anulamos en móvil para que el menú pueda cubrir TODA la pantalla
+           por encima del mapa en lugar de quedar recortado dentro del header. */
+        -webkit-backdrop-filter: none !important;
+        backdrop-filter: none !important;
+        isolation: auto !important;
+        transform: none !important;
+        filter: none !important;
+        box-shadow: none !important;
+    }
+
+    /* Cuando el menú móvil está abierto, elevar TODO el sidebar por encima
+       de cualquier otro elemento (mapa, controles, botones flotantes). */
+    body.mobile-menu-open .sidebar {
+        z-index: 10050 !important;
+        pointer-events: auto !important;
     }
 
     .sidebar-header {
@@ -1395,6 +1413,12 @@ body {
         position: relative;
     }
 
+    /* Con el menú abierto, mantener el header (y su botón de cerrar) por
+       encima del menú full-screen para que el usuario siempre pueda cerrarlo. */
+    body.mobile-menu-open .sidebar-header {
+        z-index: 10030 !important;
+    }
+
     /* Ocultar contenidos del sidebar en móvil */
     .sidebar .publish-section,
     .sidebar .filters,
@@ -1403,29 +1427,62 @@ body {
     }
 
     /* Ocultar menú móvil por defecto */
-    .sidebar .main-nav {
+    .main-nav {
         display: none !important;
     }
 
-    /* Mostrar menú cuando esté abierto */
-    body.mobile-menu-open .sidebar .main-nav {
-        display: block !important;
+    /* Mostrar menú cuando esté abierto - FULL SCREEN */
+    body.mobile-menu-open .main-nav {
+        display: flex !important;
+        flex-direction: column;
         position: fixed !important;
-        top: 56px; /* altura del header */
+        top: 0;
         left: 0;
         width: 100%;
-        max-height: calc(100vh - 56px);
+        height: 100%;
+        max-height: 100vh;
         overflow-y: auto;
-        background: rgba(24,25,26,0.95) !important;
-        backdrop-filter: blur(10px);
-        -webkit-backdrop-filter: blur(10px);
-        border-bottom: 1px solid rgba(255,255,255,0.08);
-        z-index: 10010 !important; /* Por encima del botón de filtro */
-        padding: 0.75rem 1rem;
+        -webkit-overflow-scrolling: touch;
+        background: rgba(24,25,26,0.99) !important;
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+        border: none !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+        z-index: 10020 !important; /* Por encima de todo */
+        padding: 1rem 1.25rem calc(1rem + env(safe-area-inset-bottom, 0px));
+        margin: 0 !important;
         pointer-events: auto !important; /* Permitir clicks en el menú */
     }
 
-    body.mobile-menu-open .sidebar .main-nav ul li a {
+    /* Botón de cerrar del menú móvil */
+    .mobile-menu-close {
+        display: none;
+        align-self: flex-end;
+        background: var(--background-tertiary);
+        border: 1px solid var(--border-color);
+        color: var(--text-primary);
+        font-size: 1.3rem;
+        cursor: pointer;
+        padding: 0.6rem 0.9rem;
+        border-radius: 50%;
+        transition: var(--transition);
+        margin-bottom: 0.5rem;
+    }
+
+    .mobile-menu-close:hover {
+        background: var(--danger-color);
+        color: white;
+        transform: scale(1.1);
+    }
+
+    body.mobile-menu-open .mobile-menu-close {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    body.mobile-menu-open .main-nav ul li a {
         display: block !important;
         padding: 0.75rem 0.5rem;
         color: var(--text-primary);
@@ -1436,13 +1493,13 @@ body {
         z-index: 10011 !important; /* Por encima de todo */
     }
 
-    body.mobile-menu-open .sidebar .main-nav ul li a:hover {
+    body.mobile-menu-open .main-nav ul li a:hover {
         background: var(--hover-bg);
         color: var(--primary-color);
     }
 
     /* Estilos para enlaces del menú móvil */
-    .sidebar .main-nav ul li a {
+    .main-nav ul li a {
         display: block;
         padding: 0.75rem 0.5rem;
         color: var(--text-primary);
@@ -1451,7 +1508,7 @@ body {
         transition: var(--transition);
     }
 
-    .sidebar .main-nav ul li a:hover {
+    .main-nav ul li a:hover {
         background: var(--hover-bg);
         color: var(--primary-color);
     }
@@ -2648,5 +2705,762 @@ body.wallet-page .header {
         opacity: 0.8;
     }
 }
+
+/* ============================================================
+   ===== MENÚ PREMIUM — GLASSMORPHISM + DEGRADADOS =====
+   Rediseño del sidebar/menú con estilo vidrio esmerilado,
+   degradados suaves y microinteracciones. Aplica a index.html
+   y settings.html (comparten styles.css).
+   ============================================================ */
+
+:root {
+    /* Tokens del menú premium */
+    --glass-bg: rgba(38, 40, 42, 0.55);
+    --glass-bg-strong: rgba(24, 25, 26, 0.72);
+    --glass-border: rgba(255, 255, 255, 0.10);
+    --glass-border-strong: rgba(255, 255, 255, 0.18);
+    --glass-highlight: rgba(255, 255, 255, 0.06);
+    --glass-blur: 18px;
+    --menu-gradient: linear-gradient(160deg, rgba(96, 196, 142, 0.16) 0%, rgba(232, 141, 255, 0.10) 45%, rgba(24, 25, 26, 0) 100%);
+    --menu-accent-gradient: linear-gradient(135deg, #60c48e 0%, #4fb87a 55%, #e88dff 140%);
+    --menu-glow: 0 8px 32px rgba(0, 0, 0, 0.45);
+    --menu-glow-accent: 0 6px 22px rgba(96, 196, 142, 0.35);
+}
+
+[data-theme="light"] {
+    --glass-bg: rgba(255, 255, 255, 0.55);
+    --glass-bg-strong: rgba(255, 255, 255, 0.78);
+    --glass-border: rgba(15, 20, 25, 0.08);
+    --glass-border-strong: rgba(15, 20, 25, 0.14);
+    --glass-highlight: rgba(255, 255, 255, 0.55);
+    --menu-gradient: linear-gradient(160deg, rgba(96, 196, 142, 0.18) 0%, rgba(232, 141, 255, 0.12) 45%, rgba(255, 255, 255, 0) 100%);
+    --menu-glow: 0 8px 32px rgba(15, 20, 25, 0.12);
+}
+
+/* --- Contenedor del sidebar: vidrio + degradado de fondo --- */
+.sidebar {
+    position: relative;
+    background: var(--glass-bg-strong);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(160%);
+    backdrop-filter: blur(var(--glass-blur)) saturate(160%);
+    border-right: 1px solid var(--glass-border);
+    box-shadow: var(--menu-glow);
+    isolation: isolate;
+}
+
+/* Capa de degradado decorativa detrás del contenido */
+.sidebar::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: var(--menu-gradient);
+    pointer-events: none;
+    z-index: -1;
+}
+
+/* Halo de color sutil en la parte superior */
+.sidebar::after {
+    content: "";
+    position: absolute;
+    top: -120px;
+    left: -60px;
+    width: 260px;
+    height: 260px;
+    background: radial-gradient(circle, rgba(96, 196, 142, 0.28) 0%, rgba(96, 196, 142, 0) 70%);
+    filter: blur(10px);
+    pointer-events: none;
+    z-index: -1;
+}
+
+/* --- Header del sidebar: barra de vidrio flotante --- */
+.sidebar-header {
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(160%);
+    backdrop-filter: blur(var(--glass-blur)) saturate(160%);
+    border-bottom: 1px solid var(--glass-border);
+    box-shadow: 0 1px 0 var(--glass-highlight) inset, 0 6px 18px rgba(0, 0, 0, 0.18);
+}
+
+/* Logo con degradado de texto premium */
+.sidebar .logo i {
+    background: var(--menu-accent-gradient);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+    filter: drop-shadow(0 2px 6px rgba(96, 196, 142, 0.35));
+}
+
+.sidebar .logo h1 {
+    background: linear-gradient(120deg, var(--text-primary) 0%, var(--text-primary) 55%, var(--primary-color) 130%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+    letter-spacing: 0.3px;
+}
+
+/* --- Navegación principal: tarjeta de vidrio --- */
+.main-nav {
+    margin: 0.85rem 0.9rem;
+    padding: 0.75rem;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--border-radius-lg);
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+    backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+    box-shadow: 0 1px 0 var(--glass-highlight) inset, 0 10px 26px rgba(0, 0, 0, 0.22);
+}
+
+.main-nav ul {
+    gap: 0.35rem;
+}
+
+/* Enlaces del menú: píldoras con degradado al hover/activo */
+.main-nav ul li a {
+    position: relative;
+    padding: 0.7rem 0.9rem;
+    border-radius: var(--border-radius);
+    border: 1px solid transparent;
+    color: var(--text-secondary);
+    overflow: hidden;
+    transition: color 0.25s ease, background 0.25s ease, border-color 0.25s ease, transform 0.2s ease, box-shadow 0.25s ease;
+}
+
+/* Barra de acento lateral animada */
+.main-nav ul li a::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%) scaleY(0);
+    width: 3px;
+    height: 60%;
+    border-radius: 3px;
+    background: var(--menu-accent-gradient);
+    transition: transform 0.25s ease;
+}
+
+.main-nav ul li a:hover {
+    background: linear-gradient(120deg, rgba(96, 196, 142, 0.16) 0%, rgba(232, 141, 255, 0.10) 100%);
+    border-color: var(--glass-border-strong);
+    color: var(--text-primary);
+    transform: translateX(3px);
+    box-shadow: var(--menu-glow-accent);
+}
+
+.main-nav ul li a:hover::before {
+    transform: translateY(-50%) scaleY(1);
+}
+
+.main-nav ul li a:hover i {
+    color: var(--primary-color);
+    transform: scale(1.12);
+}
+
+.main-nav ul li a i {
+    transition: transform 0.25s ease, color 0.25s ease;
+}
+
+/* Estado activo (página actual) */
+.main-nav ul li a.active {
+    background: linear-gradient(120deg, rgba(96, 196, 142, 0.22) 0%, rgba(232, 141, 255, 0.14) 100%);
+    border-color: var(--glass-border-strong);
+    color: var(--text-primary);
+    box-shadow: var(--menu-glow-accent);
+}
+
+.main-nav ul li a.active::before {
+    transform: translateY(-50%) scaleY(1);
+}
+
+.main-nav ul li a.active i {
+    color: var(--primary-color);
+}
+
+/* --- Botón Publicarme: degradado premium con brillo --- */
+.btn-publish {
+    position: relative;
+    background: var(--menu-accent-gradient);
+    background-size: 180% 180%;
+    border: 1px solid var(--glass-border-strong);
+    box-shadow: var(--menu-glow-accent), 0 1px 0 rgba(255, 255, 255, 0.25) inset;
+    overflow: hidden;
+    transition: transform 0.25s ease, box-shadow 0.25s ease, background-position 0.6s ease;
+}
+
+.btn-publish::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: -120%;
+    width: 60%;
+    height: 100%;
+    background: linear-gradient(100deg, transparent 0%, rgba(255, 255, 255, 0.35) 50%, transparent 100%);
+    transform: skewX(-18deg);
+    transition: left 0.6s ease;
+}
+
+.btn-publish:hover {
+    background-position: 100% 50%;
+    transform: translateY(-2px);
+    box-shadow: 0 10px 28px rgba(96, 196, 142, 0.45), 0 1px 0 rgba(255, 255, 255, 0.3) inset;
+}
+
+.btn-publish:hover::after {
+    left: 130%;
+}
+
+/* --- Secciones internas (filtros, lista) con vidrio suave --- */
+.publish-section,
+.filters {
+    border-bottom: 1px solid var(--glass-border);
+}
+
+.filters select,
+.filter-group select {
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+    border: 1px solid var(--glass-border);
+    transition: border-color 0.25s ease, box-shadow 0.25s ease;
+}
+
+.filters select:hover,
+.filter-group select:hover {
+    border-color: var(--glass-border-strong);
+    box-shadow: var(--menu-glow-accent);
+}
+
+/* --- Scrollbar premium del menú/sidebar --- */
+.sidebar {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(96, 196, 142, 0.55) transparent;
+}
+
+.sidebar::-webkit-scrollbar {
+    width: 10px;
+}
+
+.sidebar::-webkit-scrollbar-track {
+    background: transparent;
+    margin: 6px 0;
+}
+
+.sidebar::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+    background-image: linear-gradient(180deg, rgba(96, 196, 142, 0.85) 0%, rgba(232, 141, 255, 0.75) 100%);
+    box-shadow: 0 0 8px rgba(96, 196, 142, 0.35);
+    transition: background-image 0.25s ease, box-shadow 0.25s ease;
+}
+
+.sidebar::-webkit-scrollbar-thumb:hover {
+    background-image: linear-gradient(180deg, rgba(96, 196, 142, 1) 0%, rgba(232, 141, 255, 0.95) 100%);
+    box-shadow: 0 0 14px rgba(96, 196, 142, 0.6);
+}
+
+.sidebar::-webkit-scrollbar-corner {
+    background: transparent;
+}
+
+/* Scrollbar global (páginas con scroll general) */
+html {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(96, 196, 142, 0.55) transparent;
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+html::-webkit-scrollbar-track,
+body::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+html::-webkit-scrollbar-thumb,
+body::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+    background-image: linear-gradient(180deg, rgba(96, 196, 142, 0.85) 0%, rgba(232, 141, 255, 0.75) 100%);
+}
+
+html::-webkit-scrollbar-thumb:hover,
+body::-webkit-scrollbar-thumb:hover {
+    background-image: linear-gradient(180deg, rgba(96, 196, 142, 1) 0%, rgba(232, 141, 255, 0.95) 100%);
+}
+
+/* --- Ajustes responsive del menú premium --- */
+@media (max-width: 1024px) {
+    .main-nav {
+        margin: 0.6rem;
+    }
+
+    body.mobile-menu-open .main-nav {
+        background: var(--glass-bg-strong);
+        -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(160%);
+        backdrop-filter: blur(var(--glass-blur)) saturate(160%);
+        border: 1px solid var(--glass-border);
+        border-radius: var(--border-radius-lg);
+        box-shadow: var(--menu-glow);
+    }
+
+    body.mobile-menu-open .main-nav ul li a {
+        border-radius: var(--border-radius);
+    }
+}
+
+/* Respeto por usuarios con movimiento reducido */
+@media (prefers-reduced-motion: reduce) {
+    .main-nav ul li a,
+    .main-nav ul li a::before,
+    .main-nav ul li a i,
+    .btn-publish,
+    .btn-publish::after {
+        transition: none !important;
+    }
+}
+
+/* ============================================================
+   ===== TARJETAS DEL MENÚ (wish-item) — ESPEJO FLOTANTE =====
+   Tarjetas premium con efecto de vidrio/espejo flotante:
+   reflejo superior, borde con degradado, brillo diagonal,
+   logo circular con anillo luminoso y microinteracciones ricas.
+   ============================================================ */
+
+.wish-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 1rem 1rem 1.75rem 1rem;
+    gap: 0.9rem;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(96, 196, 142, 0.55) transparent;
+}
+
+/* Scrollbar premium de la lista de tarjetas */
+.wish-list::-webkit-scrollbar {
+    width: 8px;
+}
+
+.wish-list::-webkit-scrollbar-track {
+    background: transparent;
+    margin: 6px 0;
+}
+
+.wish-list::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+    background-image: linear-gradient(180deg, rgba(96, 196, 142, 0.85) 0%, rgba(232, 141, 255, 0.75) 100%);
+    box-shadow: 0 0 8px rgba(96, 196, 142, 0.35);
+}
+
+.wish-list::-webkit-scrollbar-thumb:hover {
+    background-image: linear-gradient(180deg, rgba(96, 196, 142, 1) 0%, rgba(232, 141, 255, 0.95) 100%);
+}
+
+.wish-item {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem 1.1rem;
+    flex: 0 0 auto;
+    min-height: 78px;
+    border-radius: var(--border-radius-lg);
+
+    border: 1px solid var(--glass-border);
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0.02) 42%, rgba(255, 255, 255, 0) 100%),
+        var(--glass-bg);
+    -webkit-backdrop-filter: blur(16px) saturate(160%);
+    backdrop-filter: blur(16px) saturate(160%);
+    box-shadow:
+        0 1px 0 var(--glass-highlight) inset,
+        0 -1px 0 rgba(0, 0, 0, 0.25) inset,
+        0 10px 24px rgba(0, 0, 0, 0.28),
+        0 2px 6px rgba(0, 0, 0, 0.20);
+    overflow: hidden;
+    cursor: pointer;
+    transform: translateZ(0);
+    transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1),
+                box-shadow 0.3s ease,
+                border-color 0.3s ease,
+                background 0.3s ease;
+}
+
+/* Reflejo tipo espejo en la mitad superior */
+.wish-item::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 52%;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0.03) 60%, rgba(255, 255, 255, 0) 100%);
+    border-radius: var(--border-radius-lg) var(--border-radius-lg) 40% 40% / var(--border-radius-lg) var(--border-radius-lg) 22% 22%;
+    pointer-events: none;
+    opacity: 0.9;
+    transition: opacity 0.3s ease;
+}
+
+/* Brillo diagonal que barre la tarjeta al hover */
+.wish-item::after {
+    content: "";
+    position: absolute;
+    top: -20%;
+    left: -130%;
+    width: 55%;
+    height: 140%;
+    background: linear-gradient(100deg, transparent 0%, rgba(255, 255, 255, 0.22) 50%, transparent 100%);
+    transform: skewX(-20deg);
+    transition: left 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+    pointer-events: none;
+}
+
+.wish-item:hover {
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0.03) 42%, rgba(255, 255, 255, 0) 100%),
+        linear-gradient(120deg, rgba(96, 196, 142, 0.18) 0%, rgba(232, 141, 255, 0.12) 100%);
+    border-color: var(--glass-border-strong);
+    transform: translateY(-4px) scale(1.012);
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.18) inset,
+        0 -1px 0 rgba(0, 0, 0, 0.25) inset,
+        0 18px 38px rgba(0, 0, 0, 0.38),
+        0 0 0 1px rgba(96, 196, 142, 0.25),
+        0 8px 26px rgba(96, 196, 142, 0.30);
+}
+
+.wish-item:hover::before {
+    opacity: 1;
+}
+
+.wish-item:hover::after {
+    left: 140%;
+}
+
+/* Logo/avatar circular con anillo luminoso (estilo espejo) */
+.wish-item .wish-logo {
+    position: relative;
+    width: 54px;
+    height: 54px;
+    border-radius: 50%;
+    background:
+        radial-gradient(circle at 30% 25%, rgba(255, 255, 255, 0.35) 0%, rgba(255, 255, 255, 0) 55%),
+        linear-gradient(135deg, rgba(96, 196, 142, 0.30) 0%, rgba(232, 141, 255, 0.24) 100%);
+    border: 1px solid var(--glass-border-strong);
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.35) inset,
+        0 6px 16px rgba(0, 0, 0, 0.30),
+        0 0 0 3px rgba(96, 196, 142, 0.10);
+    color: var(--primary-color);
+    font-size: 1.4rem;
+    flex-shrink: 0;
+    transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.3s ease;
+}
+
+.wish-item:hover .wish-logo {
+    transform: scale(1.08) rotate(-4deg);
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.45) inset,
+        0 8px 20px rgba(0, 0, 0, 0.35),
+        0 0 0 4px rgba(96, 196, 142, 0.22),
+        0 0 18px rgba(96, 196, 142, 0.45);
+}
+
+.wish-item .wish-logo img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
+}
+
+/* Texto de la tarjeta */
+.wish-item .wish-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.wish-item .wish-info h3 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 0.3rem;
+    letter-spacing: 0.1px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.wish-item .wish-info p {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+/* Acciones (corazón) con acento y fondo de vidrio */
+.wish-item .wish-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    flex-shrink: 0;
+}
+
+.wish-item .wish-actions i {
+    color: var(--text-light);
+    font-size: 1.05rem;
+    padding: 0.5rem;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid transparent;
+    transition: color 0.25s ease, background 0.25s ease, transform 0.2s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+}
+
+.wish-item .wish-actions i:hover {
+    color: var(--accent-color);
+    background: rgba(232, 141, 255, 0.16);
+    border-color: rgba(232, 141, 255, 0.35);
+    transform: scale(1.18);
+    box-shadow: 0 0 14px rgba(232, 141, 255, 0.45);
+}
+
+/* Estado activo/seleccionado de la tarjeta */
+.wish-item.active {
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0.03) 42%, rgba(255, 255, 255, 0) 100%),
+        linear-gradient(120deg, rgba(96, 196, 142, 0.24) 0%, rgba(232, 141, 255, 0.16) 100%);
+    border-color: var(--glass-border-strong);
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.20) inset,
+        0 14px 30px rgba(0, 0, 0, 0.34),
+        0 0 0 1px rgba(96, 196, 142, 0.30),
+        0 8px 24px rgba(96, 196, 142, 0.32);
+}
+
+/* Estado vacío (cuando no hay tarjetas cargadas) */
+.wish-list:empty::after {
+    content: "Cargando perfiles cercanos…";
+    display: block;
+    text-align: center;
+    padding: 2rem 1rem;
+    color: var(--text-light);
+    font-size: 0.9rem;
+    letter-spacing: 0.2px;
+}
+
+/* Ajuste responsive de las tarjetas */
+@media (max-width: 480px) {
+    .wish-item {
+        padding: 0.85rem 0.9rem;
+        border-radius: var(--border-radius);
+    }
+
+    .wish-item .wish-logo {
+        width: 46px;
+        height: 46px;
+        font-size: 1.2rem;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .wish-item,
+    .wish-item::before,
+    .wish-item::after,
+    .wish-item .wish-logo,
+    .wish-item .wish-actions i {
+        transition: none !important;
+    }
+}
+
+/* ============================================================
+   ===== TARJETAS MÓVILES (carrusel) — ESPEJO FLOTANTE =====
+   Mismo lenguaje visual premium aplicado al componente móvil
+   (.carousel-profile dentro de .carousel-slide). Solo diseño:
+   NO se altera la estructura ni la funcionalidad (click en
+   .carousel-profile, swipe del track, etc.).
+   ============================================================ */
+
+@media (max-width: 768px) {
+    /* Contenedor del carrusel: vidrio esmerilado + degradado */
+    #mobileCarouselOverlay .carousel-container {
+        background:
+            linear-gradient(180deg, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0.02) 42%, rgba(255, 255, 255, 0) 100%),
+            var(--glass-bg-strong);
+        -webkit-backdrop-filter: blur(16px) saturate(160%);
+        backdrop-filter: blur(16px) saturate(160%);
+        border: 1px solid var(--glass-border);
+        box-shadow:
+            0 1px 0 var(--glass-highlight) inset,
+            0 12px 30px rgba(0, 0, 0, 0.40),
+            0 0 0 1px rgba(96, 196, 142, 0.12);
+        border-radius: var(--border-radius-lg);
+        overflow: hidden;
+    }
+
+    /* Cada slide mantiene su layout; solo ajustamos el fondo */
+    .carousel-slide {
+        background: transparent;
+    }
+
+    /* Tarjeta de perfil: efecto espejo flotante */
+    .carousel-profile {
+        position: relative;
+        padding: 0.85rem 1rem;
+        border-radius: var(--border-radius-lg);
+        border: 1px solid var(--glass-border);
+        background:
+            linear-gradient(180deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.02) 45%, rgba(255, 255, 255, 0) 100%),
+            var(--glass-bg);
+        -webkit-backdrop-filter: blur(14px) saturate(160%);
+        backdrop-filter: blur(14px) saturate(160%);
+        box-shadow:
+            0 1px 0 var(--glass-highlight) inset,
+            0 -1px 0 rgba(0, 0, 0, 0.25) inset,
+            0 8px 20px rgba(0, 0, 0, 0.30);
+        overflow: hidden;
+        transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1),
+                    box-shadow 0.3s ease,
+                    border-color 0.3s ease;
+    }
+
+    /* Reflejo tipo espejo en la mitad superior */
+    .carousel-profile::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 52%;
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0.03) 60%, rgba(255, 255, 255, 0) 100%);
+        border-radius: var(--border-radius-lg) var(--border-radius-lg) 40% 40% / var(--border-radius-lg) var(--border-radius-lg) 22% 22%;
+        pointer-events: none;
+        opacity: 0.9;
+    }
+
+    /* Brillo diagonal que barre la tarjeta al tocar/hover */
+    .carousel-profile::after {
+        content: "";
+        position: absolute;
+        top: -20%;
+        left: -130%;
+        width: 55%;
+        height: 140%;
+        background: linear-gradient(100deg, transparent 0%, rgba(255, 255, 255, 0.22) 50%, transparent 100%);
+        transform: skewX(-20deg);
+        transition: left 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+        pointer-events: none;
+    }
+
+    .carousel-profile:active,
+    .carousel-profile:hover {
+        border-color: var(--glass-border-strong);
+        transform: translateY(-3px) scale(1.01);
+        box-shadow:
+            0 1px 0 rgba(255, 255, 255, 0.18) inset,
+            0 -1px 0 rgba(0, 0, 0, 0.25) inset,
+            0 16px 34px rgba(0, 0, 0, 0.40),
+            0 0 0 1px rgba(96, 196, 142, 0.25),
+            0 8px 24px rgba(96, 196, 142, 0.30);
+    }
+
+    .carousel-profile:active::after,
+    .carousel-profile:hover::after {
+        left: 140%;
+    }
+
+    /* Avatar circular con anillo luminoso (estilo espejo) */
+    #mobileCarouselOverlay .carousel-profile-avatar {
+        width: 58px;
+        height: 58px;
+        border-radius: 50%;
+        border: 1px solid var(--glass-border-strong);
+        box-shadow:
+            0 1px 0 rgba(255, 255, 255, 0.35) inset,
+            0 6px 16px rgba(0, 0, 0, 0.30),
+            0 0 0 3px rgba(96, 196, 142, 0.18),
+            0 0 14px rgba(96, 196, 142, 0.30);
+        transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.3s ease;
+    }
+
+    .carousel-profile:active #mobileCarouselOverlay .carousel-profile-avatar,
+    .carousel-profile:hover #mobileCarouselOverlay .carousel-profile-avatar,
+    .carousel-profile:active .carousel-profile-avatar,
+    .carousel-profile:hover .carousel-profile-avatar {
+        transform: scale(1.06) rotate(-3deg);
+        box-shadow:
+            0 1px 0 rgba(255, 255, 255, 0.45) inset,
+            0 8px 20px rgba(0, 0, 0, 0.35),
+            0 0 0 4px rgba(96, 196, 142, 0.24),
+            0 0 18px rgba(96, 196, 142, 0.45);
+    }
+
+    /* Nombre con degradado sutil */
+    #mobileCarouselOverlay .carousel-profile-name {
+        font-weight: 700;
+        letter-spacing: 0.1px;
+        background: linear-gradient(120deg, var(--text-primary) 0%, var(--text-primary) 60%, var(--primary-color) 140%);
+        -webkit-background-clip: text;
+        background-clip: text;
+        -webkit-text-fill-color: transparent;
+        color: transparent;
+    }
+
+    /* Categoría con acento */
+    #mobileCarouselOverlay .carousel-profile-category {
+        color: var(--text-secondary);
+    }
+
+    /* Indicador de estado con glow */
+    #mobileCarouselOverlay .carousel-profile-status {
+        color: var(--success-color);
+    }
+
+    #mobileCarouselOverlay .carousel-profile-status i {
+        box-shadow: 0 0 8px rgba(0, 186, 124, 0.7);
+    }
+
+    /* Botones del carrusel con degradado premium */
+    #mobileCarouselOverlay .carousel-btn {
+        background: var(--menu-accent-gradient);
+        border: 1px solid var(--glass-border-strong);
+        box-shadow: var(--menu-glow-accent), 0 1px 0 rgba(255, 255, 255, 0.25) inset;
+        transition: transform 0.25s ease, box-shadow 0.25s ease;
+    }
+
+    #mobileCarouselOverlay .carousel-btn:hover {
+        transform: scale(1.08);
+        box-shadow: 0 10px 26px rgba(96, 196, 142, 0.45), 0 1px 0 rgba(255, 255, 255, 0.3) inset;
+    }
+
+    /* Indicadores con degradado activo */
+    #mobileCarouselOverlay .carousel-indicator.active {
+        background: var(--menu-accent-gradient);
+        box-shadow: 0 0 10px rgba(96, 196, 142, 0.6);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .carousel-profile,
+    .carousel-profile::before,
+    .carousel-profile::after,
+    .carousel-profile-avatar,
+    #mobileCarouselOverlay .carousel-btn {
+        transition: none !important;
+    }
+}
+
+
 
 

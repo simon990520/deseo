@@ -1,0 +1,104 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+
+    "users": {
+      ".read": "auth != null",
+      "$uid": {
+        ".write": "auth != null && auth.uid == $uid",
+        ".validate": "newData.hasChildren(['id']) || newData.exists()",
+
+        "balance": {
+          ".read": "auth != null && auth.uid == $uid",
+          ".write": false,
+          ".validate": "newData.isNumber() && newData.val() >= 0"
+        },
+
+        "microtransactions": {
+          ".read": "auth != null && auth.uid == $uid",
+          ".write": "auth != null && auth.uid == $uid"
+        },
+
+        "transactions": {
+          ".read": "auth != null && auth.uid == $uid",
+          "$txId": {
+            ".write": "auth != null && auth.uid == $uid",
+            ".validate": "newData.hasChildren(['id','type','amount','timestamp']) && newData.child('amount').isNumber()"
+          }
+        },
+
+        "encounterRatings": {
+          ".read": "auth != null",
+          ".write": "auth != null"
+        }
+      }
+    },
+
+    "ledger": {
+      ".read": "auth != null",
+      "$opId": {
+        ".write": "auth != null && !data.exists()"
+      }
+    },
+
+    "platform_fees": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+
+    "chats": {
+      "$chatId": {
+        ".read": "auth != null && (data.child('clientId').val() == auth.uid || data.child('providerId').val() == auth.uid)",
+        ".write": "auth != null && (data.child('clientId').val() == auth.uid || data.child('providerId').val() == auth.uid)",
+        "messages": {
+          "$msgId": {
+            ".read": "auth != null",
+            ".write": "auth != null",
+            ".validate": "newData.hasChildren(['senderId','message','timestamp'])"
+          }
+        }
+      }
+    },
+
+    "wishes": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+      "$wishId": {
+        ".validate": "newData.hasChildren(['author','location','timestamp'])"
+      }
+    },
+
+    "availableProfiles": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+
+    "encounterOrders": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+
+    "disputes": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+
+    "admin_notifications": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+
+    "notifications": {
+      "$uid": {
+        ".read": "auth != null && auth.uid == $uid",
+        ".write": "auth != null && auth.uid == $uid"
+      }
+    },
+
+    "config": {
+      ".read": "auth != null",
+      ".write": false
+    }
+  }
+}

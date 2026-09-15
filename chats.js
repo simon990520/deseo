@@ -723,8 +723,8 @@ class ChatsManager {
             <div style="display: flex; align-items: center; gap: 10px;">
                 <i class="fas fa-bell" style="font-size: 18px;"></i>
                 <div>
-                    <strong>${notification.title}</strong>
-                    <p style="margin: 5px 0 0 0; font-size: 14px; opacity: 0.9;">${notification.message}</p>
+                    <strong>${this.escapeHtml(notification.title)}</strong>
+                    <p style="margin: 5px 0 0 0; font-size: 14px; opacity: 0.9;">${this.escapeHtml(notification.message)}</p>
                 </div>
             </div>
         `;
@@ -787,7 +787,7 @@ class ChatsManager {
                 <i class="fas fa-exclamation-triangle" style="font-size: 18px;"></i>
                 <div>
                     <strong>Error</strong>
-                    <p style="margin: 5px 0 0 0; font-size: 14px; opacity: 0.9;">${message}</p>
+                    <p style="margin: 5px 0 0 0; font-size: 14px; opacity: 0.9;">${this.escapeHtml(message)}</p>
                 </div>
             </div>
         `;

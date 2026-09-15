@@ -121,7 +121,7 @@ class AdminDashboard {
             transactionsList.innerHTML = `
                 <div class="no-transactions">
                     <i class="fas fa-exclamation-triangle" style="color: #f44336;"></i>
-                    <p style="color: #f44336;">${message}</p>
+                    <p style="color: #f44336;">${escapeHtml(message)}</p>
                 </div>
             `;
         }
@@ -697,45 +697,60 @@ class AdminDashboard {
 
         try {
             console.log('🔍 Debug: Aprobando transacción con mensaje:', transactionId);
-            
-            // Actualizar estado de la transacción y agregar mensaje
+
             const transactionRef = this.database.ref(`transactions/${userId}/${transactionId}`);
+            const txSnap = await transactionRef.once('value');
+            const transactionData = txSnap.val();
+
+            if (!transactionData) {
+                alert('❌ Transacción no encontrada.');
+                return;
+            }
+
+            // IDEMPOTENCIA: evitar doble aprobación (doble crédito/débito).
+            if (transactionData.status === 'completed') {
+                alert('ℹ️ Esta transacción ya fue aprobada.');
+                return;
+            }
+            if (transactionData.status === 'rejected') {
+                alert('❌ Esta transacción fue rechazada y no puede aprobarse.');
+                return;
+            }
+
+            const transactionType = transactionData.type || 'income';
+            const amt = parseInt(amount, 10);
+            if (!Number.isFinite(amt) || amt <= 0) {
+                alert('❌ Monto inválido.');
+                return;
+            }
+
+            // Actualizar estado de la transacción y agregar mensaje
             await transactionRef.update({
                 status: 'completed',
                 adminMessage: message || null,
                 adminActionDate: new Date().toISOString()
             });
-            
-            // Actualizar balance del usuario
-            const userRef = this.database.ref(`users/${userId}`);
-            const userSnapshot = await userRef.once('value');
-            const userData = userSnapshot.val();
-            const currentBalance = userData.balance || 0;
-            
-            // Obtener el tipo de transacción para determinar si sumar o restar
-            const transactionSnapshot = await transactionRef.once('value');
-            const transactionData = transactionSnapshot.val();
-            const transactionType = transactionData?.type || 'income';
-            
-            console.log('🔍 Debug transacción:', {
-                transactionType,
-                currentBalance,
-                amount,
-                isOutcome: transactionType === 'outcome'
-            });
-            
-            // Para retiros (outcome) restar del balance, para depósitos (income) sumar al balance
-            const newBalance = transactionType === 'outcome' 
-                ? currentBalance - amount 
-                : currentBalance + amount;
-            
-            console.log('🔍 Nuevo balance calculado:', newBalance);
-            
-            await userRef.update({
-                balance: newBalance,
-                lastUpdated: new Date().toISOString()
-            });
-            
+
+            // Ajuste de balance ATÓMICO.
+            //  - Si es un retiro (outcome) que YA reservó fondos al solicitarse
+            //    (fundsReserved === true), NO descontar de nuevo.
+            //  - Para depósitos (income) acreditar el monto.
+            if (transactionType === 'outcome' && transactionData.fundsReserved === true) {
+                console.log('ℹ️ Retiro con fondos ya reservados: no se descuenta de nuevo.');
+            } else if (window.DeseoMoney) {
+                if (transactionType === 'outcome') {
+                    await window.DeseoMoney.charge(this.database, userId, amt, {
+                        reason: 'withdrawal_approved', opId: `approve_${transactionId}`
+                    });
+                } else {
+                    await window.DeseoMoney.credit(this.database, userId, amt, {
+                        reason: 'deposit_approved', opId: `approve_${transactionId}`
+                    });
+                }
+            } else {
+                console.error('❌ DeseoMoney no disponible; no se ajustó el balance por seguridad.');
+            }
+
             console.log('✅ Transacción aprobada con mensaje exitosamente');
             const actionMessage = transactionType === 'outcome' 
                 ? 'Retiro aprobado. El dinero será transferido a la cuenta bancaria del usuario.'
@@ -756,15 +771,43 @@ class AdminDashboard {
 
         try {
             console.log('🔍 Debug: Rechazando transacción con mensaje:', transactionId);
-            
-            // Actualizar estado de la transacción y agregar mensaje
+
             const transactionRef = this.database.ref(`transactions/${userId}/${transactionId}`);
+            const txSnap = await transactionRef.once('value');
+            const transactionData = txSnap.val();
+
+            if (!transactionData) {
+                alert('❌ Transacción no encontrada.');
+                return;
+            }
+            if (transactionData.status === 'rejected') {
+                alert('ℹ️ Esta transacción ya fue rechazada.');
+                return;
+            }
+            if (transactionData.status === 'completed') {
+                alert('❌ Esta transacción ya fue aprobada y no puede rechazarse.');
+                return;
+            }
+
+            // Actualizar estado de la transacción y agregar mensaje
             await transactionRef.update({
                 status: 'rejected',
                 adminMessage: message || null,
                 adminActionDate: new Date().toISOString()
             });
-            
+
+            // REEMBOLSO: si era un retiro (outcome) cuyos fondos ya se habían
+            // reservado al solicitar, devolver el saldo al usuario.
+            if (transactionData.type === 'outcome' && transactionData.fundsReserved === true && window.DeseoMoney) {
+                const amt = parseInt(transactionData.amount, 10);
+                if (Number.isFinite(amt) && amt > 0) {
+                    await window.DeseoMoney.credit(this.database, userId, amt, {
+                        reason: 'withdrawal_rejected_refund', opId: `refund_${transactionId}`
+                    });
+                    await transactionRef.update({ fundsReserved: false, refundedAt: new Date().toISOString() });
+                }
+            }
+
             console.log('✅ Transacción rechazada con mensaje');
             alert('✅ Transacción rechazada.');
             
@@ -1603,14 +1646,30 @@ class AdminDashboard {
 // Inicializar la aplicación cuando el DOM esté listo
 document.addEventListener('DOMContentLoaded', () => {
     console.log('🏁 DOM cargado. Inicializando Admin Dashboard...');
-    
-    // Esperar un momento para asegurar que todos los scripts estén cargados
-    setTimeout(() => {
-        if (!window.adminApp) {
-            window.adminApp = new AdminDashboard();
-            console.log('✨ AdminDashboard instance created.');
-        } else {
-            console.log('AdminDashboard ya estaba inicializada.');
+
+    // SEGURIDAD: no arrancar el panel si el gate de acceso lo denegó.
+    const start = () => {
+        if (window.__DESEO_ADMIN_DENIED__) {
+            console.warn('⛔ Panel admin bloqueado por el gate de acceso.');
+            return;
         }
-    }, 100);
+        // Esperar un momento para asegurar que todos los scripts estén cargados
+        setTimeout(() => {
+            if (window.__DESEO_ADMIN_DENIED__) return;
+            if (!window.adminApp) {
+                window.adminApp = new AdminDashboard();
+                console.log('✨ AdminDashboard instance created.');
+            } else {
+                console.log('AdminDashboard ya estaba inicializada.');
+            }
+        }, 100);
+    };
+
+    if (window.deseoAdminGate && window.deseoAdminGate.ready) {
+        window.deseoAdminGate.ready.then((granted) => { if (granted) start(); });
+    } else if (window.__DESEO_ADMIN_GRANTED__) {
+        start();
+    } else {
+        console.warn('⚠️ Gate de admin no detectado; no se inicia el panel por seguridad.');
+    }
 });

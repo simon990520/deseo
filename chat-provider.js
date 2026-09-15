@@ -385,7 +385,7 @@ class ChatProvider {
 
         try {
             const messageData = {
-                id: Date.now().toString(),
+                id: this.database.ref(`chats/${this.chatId}/messages`).push().key,
                 senderId: this.currentUser.id,
                 senderName: this.currentUser.name,
                 message: message,
@@ -482,6 +482,10 @@ class ChatProvider {
                 price,
                 description: description.trim(),
                 time,
+                // Texto legible para render genérico, notificaciones y compatibilidad.
+                message: `Oferta de servicio: $${price.toLocaleString('es-CO')}` +
+                    (description.trim() ? `\n${description.trim()}` : '') +
+                    (time ? `\nDisponible: ${time}` : ''),
                 timestamp: new Date().toISOString()
             });
             this.closeModalSafe('offerServiceModal');
@@ -826,22 +830,21 @@ class ChatProvider {
         }
     }
 
-    async creditProvider(amount, reason) {
+    async creditProvider(amount, reason, opId) {
         try {
             if (!this.database || !this.currentUser) return;
-            const balanceRef = this.database.ref(`users/${this.currentUser.id}/balance`);
-            const snap = await balanceRef.once('value');
-            const current = parseInt(snap.val() || '0', 10);
-            await balanceRef.set(current + amount);
-            const microId = `micro_${Date.now()}`;
-            await this.database.ref(`users/${this.currentUser.id}/microtransactions/${microId}`).set({
-                id: microId,
-                direction: 'in',
-                reason,
-                amount,
+            const amt = parseInt(amount, 10);
+            if (!Number.isFinite(amt) || amt <= 0) return;
+            // Acreditación ATÓMICA e idempotente vía DeseoMoney.
+            if (!window.DeseoMoney) {
+                console.error('❌ DeseoMoney no disponible; abortando crédito por seguridad.');
+                return;
+            }
+            await window.DeseoMoney.credit(this.database, this.currentUser.id, amt, {
+                reason: reason,
                 from: this.otherUserId,
                 chatId: this.chatId,
-                timestamp: new Date().toISOString()
+                opId: opId
             });
         } catch (e) {
             console.error('❌ Error acreditando al proveedor:', e);
@@ -1053,22 +1056,6 @@ class ChatProvider {
         }
     }
 
-    async sendSpecialMessage(message, type) {
-        if (!this.database || !this.chatId) return;
-
-        const messageData = {
-            id: Date.now().toString(),
-            senderId: this.currentUser.id,
-            senderName: this.currentUser.name,
-            message: message,
-            timestamp: new Date().toISOString(),
-            type: type
-        };
-
-        const messagesRef = this.database.ref(`chats/${this.chatId}/messages/${messageData.id}`);
-        await messagesRef.set(messageData);
-    }
-
     async saveRating(ratingData) {
         if (!this.database || !this.chatId) return;
 
@@ -1212,7 +1199,30 @@ class ChatProvider {
             }
         } else if (message.type === 'service_offer') {
             // Oferta de encuentro
-            messageHtml = this.createEncounterOfferHTML(message);
+            if (message.senderId === this.currentUser.id) {
+                // El proveedor ve su propia oferta como tarjeta informativa
+                messageHtml = `<div class="encounter-offer sent-offer">
+                    <div class="offer-header"><h4>💼 Oferta de servicio enviada</h4></div>
+                    <div class="offer-details">
+                        <p><strong>Precio:</strong> $${(message.price || 0).toLocaleString('es-CO')} pesos</p>
+                        ${message.description ? `<p><strong>Descripción:</strong> ${this.escapeHtml(message.description)}</p>` : ''}
+                        ${message.time ? `<p><strong>Tiempo:</strong> ${this.escapeHtml(message.time)}</p>` : ''}
+                    </div>
+                </div>`;
+            } else {
+                messageHtml = this.createEncounterOfferHTML(message);
+            }
+        } else if (message.type === 'service_request') {
+            // Solicitud de servicio enviada por el cliente
+            messageHtml = `<div class="service-request-card">
+                <div class="offer-header"><h4>🛠️ Solicitud de servicio</h4></div>
+                <div class="offer-details">
+                    <p><strong>Título:</strong> ${this.escapeHtml(message.title || '')}</p>
+                    ${message.description ? `<p><strong>Detalles:</strong> ${this.escapeHtml(message.description)}</p>` : ''}
+                    ${message.budget ? `<p><strong>Presupuesto:</strong> $${Number(message.budget).toLocaleString('es-CO')}</p>` : ''}
+                    ${message.when ? `<p><strong>Cuándo:</strong> ${this.escapeHtml(message.when)}</p>` : ''}
+                </div>
+            </div>`;
         } else if (message.type === 'tips_request') {
             // Solicitud de propina
             messageHtml = `<div class="tips-request">
@@ -1239,6 +1249,17 @@ class ChatProvider {
         })}</small>`;
         
         content.innerHTML = messageHtml;
+
+        // Delegación de eventos: abrir foto del bloque desbloqueado sin onclick inline.
+        content.querySelectorAll('.photo-item[data-photo-index]').forEach((el) => {
+            el.addEventListener('click', () => {
+                const img = el.querySelector('img');
+                const idx = parseInt(el.getAttribute('data-photo-index'), 10) || 1;
+                if (img && typeof window.showPhotoModal === 'function') {
+                    window.showPhotoModal(img.src, idx);
+                }
+            });
+        });
         
         // Agregar elementos al mensaje
         if (!isAdmin) {
@@ -1290,12 +1311,15 @@ class ChatProvider {
                     </div>
                 </div>
                 <div class="photos-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); gap: 8px;">
-                    ${images.map((imageData, index) => `
-                        <div class="photo-item" style="position: relative; cursor: pointer;" onclick="showPhotoModal('${imageData}', ${index + 1})">
-                            <img src="${imageData}" style="width: 100%; height: 80px; object-fit: cover; border-radius: 6px; border: 2px solid #10b981;" alt="Foto ${index + 1}">
+                    ${images.map((imageData, index) => {
+                        const safeSrc = (typeof safeUrl === 'function') ? safeUrl(imageData) : '';
+                        return `
+                        <div class="photo-item" style="position: relative; cursor: pointer;" data-photo-index="${index + 1}">
+                            <img src="${safeSrc}" style="width: 100%; height: 80px; object-fit: cover; border-radius: 6px; border: 2px solid #10b981;" alt="Foto ${index + 1}">
                             <div style="position: absolute; bottom: 2px; right: 2px; background: rgba(0,0,0,0.7); color: white; font-size: 10px; padding: 2px 4px; border-radius: 3px;">${index + 1}</div>
                         </div>
-                    `).join('')}
+                    `;
+                    }).join('')}
                 </div>
             </div>
         `;
@@ -1321,7 +1345,7 @@ class ChatProvider {
         `;
     }
 
-    handleQuickAction(action) {
+    handleChatMenuAction(action) {
         switch (action) {
             case 'quote':
                 this.openQuoteModal();
@@ -1443,7 +1467,7 @@ class ChatProvider {
         if (!this.database || !this.chatId) return;
 
         const messageData = {
-            id: Date.now().toString(),
+            id: this.database.ref(`chats/${this.chatId}/messages`).push().key,
             senderId: this.currentUser.id,
             senderName: this.currentUser.name,
             message: message,
@@ -1588,7 +1612,7 @@ class ChatProvider {
                 <i class="fas fa-exclamation-triangle" style="font-size: 18px;"></i>
                 <div>
                     <strong>Error</strong>
-                    <p style="margin: 5px 0 0 0; font-size: 14px; opacity: 0.9;">${message}</p>
+                    <p style="margin: 5px 0 0 0; font-size: 14px; opacity: 0.9;">${this.escapeHtml(message)}</p>
                 </div>
             </div>
         `;
@@ -1740,10 +1764,15 @@ class ChatProvider {
                 reader.onload = (e) => {
                     const item = document.createElement('div');
                     item.className = 'evidence-preview-item';
-                    item.innerHTML = `
-                        <img src="${e.target.result}" alt="Evidence ${index + 1}">
-                        <button class="remove-btn" onclick="this.parentElement.remove()">×</button>
-                    `;
+                    const img = document.createElement('img');
+                    img.src = e.target.result; // resultado local de FileReader (data URL, no controlado por atacante)
+                    img.alt = `Evidence ${index + 1}`;
+                    const btn = document.createElement('button');
+                    btn.className = 'remove-btn';
+                    btn.textContent = '×';
+                    btn.addEventListener('click', () => item.remove());
+                    item.appendChild(img);
+                    item.appendChild(btn);
                     preview.appendChild(item);
                 };
                 reader.readAsDataURL(file);

@@ -191,8 +191,8 @@ class DeseoApp {
 
         pin.innerHTML = `
             <i class="${categoryIcons[wish.category] || 'fas fa-star'}"></i>
-            <span class="pin-price">$${wish.price}</span>
-            <span class="pin-category">${this.getCategoryName(wish.category)}</span>
+            <span class="pin-price">$${escapeInt(wish.price, '')}</span>
+            <span class="pin-category">${escapeHtml(this.getCategoryName(wish.category))}</span>
         `;
 
         pin.addEventListener('click', () => this.showWishDetails(wish));
@@ -315,7 +315,7 @@ class DeseoApp {
         messageDiv.innerHTML = `
             ${avatar}
             <div class="message-content">
-                <p>${message}</p>
+                <p>${escapeHtml(message)}</p>
             </div>
         `;
 
@@ -475,7 +475,7 @@ class DeseoApp {
             messageDiv.innerHTML = `
                 ${avatar}
                 <div class="message-content">
-                    <p>${msg.message}</p>
+                    <p>${escapeHtml(msg.message)}</p>
                     <small>${this.formatTime(msg.timestamp)}</small>
                 </div>
             `;

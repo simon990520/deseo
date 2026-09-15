@@ -1,0 +1,21 @@
+{
+  "name": "deseo",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Deseo - Plataforma de micro-deseos geolocalizados (frontend estático + Firebase RTDB + serverless Bold).",
+  "scripts": {
+    "start": "npx --yes serve -l 3000 .",
+    "serve": "npx --yes serve -l 3000 .",
+    "lint": "eslint . --ext .js",
+    "lint:fix": "eslint . --ext .js --fix",
+    "format": "prettier --write \"**/*.{js,json,css,html,md}\"",
+    "format:check": "prettier --check \"**/*.{js,json,css,html,md}\""
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0",
+    "prettier": "^3.3.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

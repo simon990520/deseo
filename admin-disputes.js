@@ -189,15 +189,15 @@ class AdminDisputes {
         emptyState.style.display = 'none';
         
         disputesList.innerHTML = this.disputes.map(dispute => `
-            <div class="dispute-item" data-dispute-id="${dispute.id}">
+            <div class="dispute-item" data-dispute-id="${escapeAttr(dispute.id)}">
                 <div class="dispute-item-header">
                     <span class="dispute-item-id">Disputa #${dispute.id.slice(-6)}</span>
                     <span class="dispute-item-status ${dispute.status}">${this.getStatusText(dispute.status)}</span>
                 </div>
-                <div class="dispute-item-amount">$${dispute.amount || 0}</div>
+                <div class="dispute-item-amount">$${escapeInt(dispute.amount, 0)}</div>
                 <div class="dispute-item-meta">
                     ${new Date(dispute.createdAt).toLocaleDateString()} • 
-                    ${dispute.clientName || 'Cliente'} vs ${dispute.providerName || 'Proveedor'}
+                    ${escapeHtml(dispute.clientName || 'Cliente')} vs ${escapeHtml(dispute.providerName || 'Proveedor')}
                 </div>
             </div>
         `).join('');
@@ -354,7 +354,7 @@ class AdminDisputes {
 
             return `
                 <div class="${messageClass}">
-                    ${message.message}
+                    ${escapeHtml(message.message)}
                     <div class="message-time">${new Date(message.timestamp).toLocaleTimeString()}</div>
                 </div>
             `;
@@ -437,10 +437,10 @@ class AdminDisputes {
         // Client evidence
         if (evidenceData.client && evidenceData.client.length > 0) {
             clientEvidence.innerHTML = evidenceData.client.map(evidence => `
-                <div class="evidence-item" onclick="window.open('${evidence.data}', '_blank')">
-                    <img src="${evidence.data}" alt="Evidence">
+                <div class="evidence-item" data-evidence-url="${escapeAttr(safeUrl(evidence.data))}">
+                    <img src="${escapeAttr(safeUrl(evidence.data))}" alt="Evidence">
                     <div class="evidence-item-info">
-                        <div>Subido por: ${evidence.uploadedByName}</div>
+                        <div>Subido por: ${escapeHtml(evidence.uploadedByName)}</div>
                         <div>${new Date(evidence.uploadedAt).toLocaleString()}</div>
                     </div>
                 </div>
@@ -457,10 +457,10 @@ class AdminDisputes {
         // Provider evidence
         if (evidenceData.provider && evidenceData.provider.length > 0) {
             providerEvidence.innerHTML = evidenceData.provider.map(evidence => `
-                <div class="evidence-item" onclick="window.open('${evidence.data}', '_blank')">
-                    <img src="${evidence.data}" alt="Evidence">
+                <div class="evidence-item" data-evidence-url="${escapeAttr(safeUrl(evidence.data))}">
+                    <img src="${escapeAttr(safeUrl(evidence.data))}" alt="Evidence">
                     <div class="evidence-item-info">
-                        <div>Subido por: ${evidence.uploadedByName}</div>
+                        <div>Subido por: ${escapeHtml(evidence.uploadedByName)}</div>
                         <div>${new Date(evidence.uploadedAt).toLocaleString()}</div>
                     </div>
                 </div>
@@ -473,6 +473,15 @@ class AdminDisputes {
                 </div>
             `;
         }
+
+        // Abrir la evidencia en pestaña nueva (delegado, sin onclick inline)
+        document.querySelectorAll('.evidence-item[data-evidence-url]').forEach(el => {
+            el.style.cursor = 'pointer';
+            el.addEventListener('click', () => {
+                const url = el.getAttribute('data-evidence-url');
+                if (url && /^https?:\/\//i.test(url)) window.open(url, '_blank', 'noopener,noreferrer');
+            });
+        });
     }
 
     loadDisputeDetails() {
@@ -513,10 +522,10 @@ class AdminDisputes {
         historyContainer.innerHTML = historyItems.map(item => `
             <div class="history-item">
                 <div class="history-item-header">
-                    <span class="history-item-title">${item.title}</span>
-                    <span class="history-item-date">${item.date}</span>
+                    <span class="history-item-title">${escapeHtml(item.title)}</span>
+                    <span class="history-item-date">${escapeHtml(item.date)}</span>
                 </div>
-                <div class="history-item-description">${item.description}</div>
+                <div class="history-item-description">${escapeHtml(item.description)}</div>
             </div>
         `).join('');
     }
@@ -730,14 +739,14 @@ class AdminDisputes {
 
         disputeList.innerHTML = this.disputes.map(dispute => `
             <div class="dispute-item ${dispute.id === this.currentDispute?.id ? 'active' : ''}" 
-                 data-dispute-id="${dispute.id}">
+                 data-dispute-id="${escapeAttr(dispute.id)}">
                 <div class="dispute-header">
-                    <span class="dispute-id">#${dispute.id}</span>
+                    <span class="dispute-id">#${escapeHtml(dispute.id)}</span>
                     <span class="dispute-status ${dispute.status}">${this.getStatusText(dispute.status)}</span>
                 </div>
                 <div class="dispute-amount">$${dispute.amount || 0}</div>
                 <div class="dispute-parties">
-                    ${dispute.clientName || 'Cliente'} vs ${dispute.providerName || 'Proveedor'}
+                    ${escapeHtml(dispute.clientName || 'Cliente')} vs ${escapeHtml(dispute.providerName || 'Proveedor')}
                 </div>
             </div>
         `).join('');

@@ -173,7 +173,7 @@ class DeseoAuth {
             
             userInfo.innerHTML = `
                 <div class="user-avatar">
-                    <img src="${this.currentUser.photoURL || 'https://via.placeholder.com/40'}" alt="Avatar">
+                    <img src="${safeUrl(this.currentUser.photoURL) || 'https://via.placeholder.com/40'}" alt="Avatar">
                 </div>
                 <div class="user-details">
                     <h3>${displayName}</h3>
@@ -237,9 +237,25 @@ class DeseoAuth {
         }
     }
 
-    signInWithEmailLocal(email, password) {
+    async signInWithEmailLocal(email, password) {
         const users = JSON.parse(localStorage.getItem('deseo_users') || '[]');
-        const user = users.find(u => u.email === email && u.password === password);
+        // Verificar con hash (soporta migración de contraseñas en texto plano)
+        let user = null;
+        for (const u of users) {
+            if (u.email !== email) continue;
+            const ok = (typeof verifyPassword === 'function')
+                ? await verifyPassword(password, u.password)
+                : (u.password === password);
+            if (ok) {
+                user = u;
+                // Migrar contraseña legada a hash
+                if (typeof isHashed === 'function' && !isHashed(u.password) && typeof hashPassword === 'function') {
+                    u.password = await hashPassword(password);
+                    localStorage.setItem('deseo_users', JSON.stringify(users));
+                }
+                break;
+            }
+        }
         
         if (user) {
             const userObj = {
@@ -289,7 +305,7 @@ class DeseoAuth {
         }
     }
 
-    signUpWithEmailLocal(email, password, userData) {
+    async signUpWithEmailLocal(email, password, userData) {
         const users = JSON.parse(localStorage.getItem('deseo_users') || '[]');
         
         // Verificar si el usuario ya existe
@@ -300,7 +316,7 @@ class DeseoAuth {
         const newUser = {
             uid: 'local_' + Date.now(),
             email: email,
-            password: password,
+            password: (typeof hashPassword === 'function') ? await hashPassword(password) : password,
             fullName: userData.fullName,
             address: userData.address,
             gender: userData.gender,

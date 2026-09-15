@@ -230,20 +230,20 @@ class DeseoWishes {
                 </div>
                 <div class="modal-body">
                     <div class="wish-preview">
-                        <h3>${wishData.title}</h3>
-                        <p class="wish-description">${wishData.description}</p>
+                        <h3>${escapeHtml(wishData.title)}</h3>
+                        <p class="wish-description">${escapeHtml(wishData.description)}</p>
                         <div class="wish-details">
                             <div class="detail-item">
                                 <i class="fas fa-tag"></i>
-                                <span>Categoría: ${wishData.category}</span>
+                                <span>Categoría: ${escapeHtml(wishData.category)}</span>
                             </div>
                             <div class="detail-item">
                                 <i class="fas fa-dollar-sign"></i>
-                                <span>Precio: $${wishData.price}</span>
+                                <span>Precio: $${escapeInt(wishData.price, '')}</span>
                             </div>
                             <div class="detail-item">
                                 <i class="fas fa-map-marker-alt"></i>
-                                <span>${wishData.address}</span>
+                                <span>${escapeHtml(wishData.address)}</span>
                             </div>
                         </div>
                     </div>

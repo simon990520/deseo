@@ -1805,8 +1805,90 @@
                         </div>
 
     <!-- Scripts -->
+    <script src="config.local.js"></script>
+    <script src="security-utils.js"></script>
+    <script src="session-utils.js"></script>
+    <script src="firebase-money.js"></script>
     <script src="config.js"></script>
+    <script src="log-utils.js"></script>
     <script src="theme-manager.js"></script>
+
+    <!-- Clerk SDK v6: se carga como módulo ESM (core) + bundle de UI. -->
+    <script type="module">
+        (function () {
+            var CLERK_KEY = (window.CONFIG && CONFIG.CLERK)
+                ? (CONFIG.CLERK.publishableKey || CONFIG.CLERK.PUBLISHABLE_KEY)
+                : '';
+            if (!CLERK_KEY || /XXXX/.test(CLERK_KEY)) {
+                console.warn('Clerk publishable key no configurada. El panel admin quedará bloqueado.');
+                window.__DESEO_CLERK_KEY__ = '';
+                window.__DESEO_CLERK_READY__ = Promise.resolve();
+                return;
+            }
+            window.__DESEO_CLERK_KEY__ = CLERK_KEY;
+
+            var domain = '';
+            try { domain = atob(CLERK_KEY.split('_')[2]).slice(0, -1); } catch (e) { domain = ''; }
+
+            function loadScript(src) {
+                return new Promise(function (resolve, reject) {
+                    var s = document.createElement('script');
+                    s.async = true;
+                    s.crossOrigin = 'anonymous';
+                    s.src = src;
+                    s.onload = resolve;
+                    s.onerror = function () { reject(new Error('No se pudo cargar ' + src)); };
+                    document.head.appendChild(s);
+                });
+            }
+
+            window.__DESEO_CLERK_READY__ = (async function () {
+                try {
+                    var uiLoad = domain
+                        ? loadScript('https://' + domain + '/npm/@clerk/ui@1/dist/ui.browser.js')
+                        : Promise.resolve();
+                    var mod = await import('https://cdn.jsdelivr.net/npm/@clerk/clerk-js@6.31.1/+esm');
+                    var ClerkCtor = mod.Clerk || (mod.default && mod.default.Clerk) || mod.default;
+                    if (!ClerkCtor) { throw new Error('No se encontró la clase Clerk en el módulo ESM'); }
+                    window.__DESEO_CLERK_CTOR__ = ClerkCtor;
+                    await uiLoad;
+                } catch (err) {
+                    console.error('❌ Error cargando Clerk (ESM/UI):', err);
+                }
+            })();
+        })();
+    </script>
+
+    <!-- Instanciar Clerk (v6: new Clerk + load con UI) antes del gate -->
+    <script>
+        window.__DESEO_CLERK_INIT__ = (async function () {
+            // Esperar activamente al constructor ESM (por si el import() aún está en vuelo).
+            for (var i = 0; i < 100 && typeof window.__DESEO_CLERK_CTOR__ !== 'function'; i++) {
+                await new Promise(function (r) { setTimeout(r, 100); });
+            }
+            var Ctor = window.__DESEO_CLERK_CTOR__;
+            var key = window.__DESEO_CLERK_KEY__;
+            if (!Ctor || !key) {
+                console.error('❌ Clerk (admin): constructor o key no disponibles.');
+                return null;
+            }
+            try {
+                var clerk = new Ctor(key);
+                var uiCtor = window.__internal_ClerkUICtor;
+                await clerk.load(uiCtor ? { ui: { ClerkUI: uiCtor } } : undefined);
+                window.Clerk = clerk;
+                window.__DESEO_CLERK__ = clerk;
+                console.log('✅ Clerk (admin) listo.' + (uiCtor ? ' UI OK' : ' SIN UI'));
+                return clerk;
+            } catch (err) {
+                console.error('❌ Error inicializando Clerk (admin):', err);
+                return null;
+            }
+        })();
+    </script>
+
+    <!-- Gate de acceso: bloquea el panel hasta validar sesión + rol admin -->
+    <script src="admin-auth-gate.js"></script>
     <script src="admin-dashboard.js"></script>
 </body>
 </html>

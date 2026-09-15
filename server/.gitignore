@@ -1,1 +1,5 @@
-.vercel
+# Secretos locales del backend — NO versionar
+.env
+.env.*
+!.env.example
+node_modules/

@@ -918,6 +918,23 @@ class DeseoApp {
             console.warn('⚠️ sidebarToggle not found');
         }
 
+        // Botón de cerrar del menú móvil (full screen)
+        if (!this._mobileMenuCloseBound) {
+            this._mobileMenuCloseBound = true;
+            document.addEventListener('click', (e) => {
+                const closeBtn = e.target.closest && e.target.closest('#mobileMenuClose');
+                if (closeBtn) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    this.closeMobileMenu();
+                }
+            }, true); // fase de captura para adelantarnos a otros handlers
+        }
+        const mobileMenuClose = document.getElementById('mobileMenuClose');
+        if (!mobileMenuClose) {
+            console.warn('⚠️ mobileMenuClose not found');
+        }
+
         // Botón "Publicarme" móvil
         const mobilePublishBtn = document.getElementById('mobilePublishBtn');
         if (mobilePublishBtn) {

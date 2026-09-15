@@ -1,0 +1,37 @@
+# ===== Secretos y configuración local =====
+# config.js es el cargador versionado (NO contiene secretos): SÍ se versiona.
+# config.local.js contiene tokens/keys reales: NO se versiona.
+config.local.js
+.env
+.env.*
+!.env.example
+server/.env
+server/.env.*
+
+# ===== Backups locales de auditoría =====
+_backup_audit/
+
+# ===== Datos voluminosos / con PII =====
+data.json
+data/*.json
+uploads/
+photos/
+*.base64
+
+# ===== Node / tooling =====
+node_modules/
+npm-debug.log*
+pnpm-debug.log*
+yarn-error.log*
+.pnpm-store/
+
+# ===== Editor / OS =====
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===== Vercel / Netlify =====
+.vercel/
+.netlify/

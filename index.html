@@ -31,10 +31,10 @@
                     </button>
                 </div>
             </div>
-            <nav class="main-nav hidden">
+            <nav class="main-nav hidden" id="mainNav">
                 <ul>
                     <li><a href="#" id="authButton"><i class="fas fa-user"></i> Iniciar Sesión</a></li> <!-- Botón de Auth -->
-                    <li><a href="index.html"><i class="fas fa-home"></i> Inicio</a></li>
+                    <li><a href="index.html" class="active"><i class="fas fa-home"></i> Inicio</a></li>
                     <li><a href="#" id="mobilePublishBtn"><i class="fas fa-plus"></i> Publicarme</a></li> <!-- Botón de Publicarme para móvil -->
                     <li><a href="chats.html"><i class="fas fa-comments"></i> Chats</a></li>
                     <li><a href="wallet.html"><i class="fas fa-wallet"></i> Billetera</a></li>
@@ -397,7 +397,12 @@
     </div>
 
     <!-- Scripts -->
+    <script src="config.local.js"></script>
+    <script src="security-utils.js"></script>
+    <script src="session-utils.js"></script>
+    <script src="firebase-money.js"></script>
     <script src="config.js?v=3.0&t=2024-01-15"></script>
+    <script src="log-utils.js"></script>
     <script src="theme-manager.js"></script>
     
     <!-- Firebase SDKs -->
@@ -406,12 +411,55 @@
     
     <script src="script-mapbox.js" onload="console.log('✅ script-mapbox.js loaded successfully')" onerror="console.error('❌ Failed to load script-mapbox.js')"></script>
     
-    <!-- Clerk SDKs -->
-    <script
-    async
-    crossorigin="anonymous"
-    data-clerk-publishable-key="pk_test_bWVycnktamF5LTExLmNsZXJrLmFjY291bnRzLmRldiQ"
-    src="https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js">
+    <!-- Clerk SDK v6: se carga como módulo ESM (core) + bundle de UI. -->
+    <script type="module">
+        (function () {
+            // La publishable key es pública, pero se centraliza en config para no duplicarla.
+            var CLERK_KEY = (window.CONFIG && CONFIG.CLERK)
+                ? (CONFIG.CLERK.publishableKey || CONFIG.CLERK.PUBLISHABLE_KEY)
+                : '';
+            if (!CLERK_KEY || /XXXX/.test(CLERK_KEY)) {
+                console.warn('Clerk publishable key no configurada (config.local.js). Clerk no se cargará.');
+                window.__DESEO_CLERK_KEY__ = '';
+                window.__DESEO_CLERK_READY__ = Promise.resolve();
+                return;
+            }
+            window.__DESEO_CLERK_KEY__ = CLERK_KEY;
+
+            // Dominio frontend derivado de la publishable key (base64 -> "<app>.clerk.accounts.dev").
+            var domain = '';
+            try { domain = atob(CLERK_KEY.split('_')[2]).slice(0, -1); } catch (e) { domain = ''; }
+
+            function loadScript(src) {
+                return new Promise(function (resolve, reject) {
+                    var s = document.createElement('script');
+                    s.async = true;
+                    s.crossOrigin = 'anonymous';
+                    s.src = src;
+                    s.onload = resolve;
+                    s.onerror = function () { reject(new Error('No se pudo cargar ' + src)); };
+                    document.head.appendChild(s);
+                });
+            }
+
+            // v6: el core se carga como módulo ESM (+esm) y el bundle de UI por separado.
+            window.__DESEO_CLERK_READY__ = (async function () {
+                try {
+                    var uiLoad = domain
+                        ? loadScript('https://' + domain + '/npm/@clerk/ui@1/dist/ui.browser.js')
+                        : Promise.resolve();
+
+                    var mod = await import('https://cdn.jsdelivr.net/npm/@clerk/clerk-js@6.31.1/+esm');
+                    var ClerkCtor = mod.Clerk || (mod.default && mod.default.Clerk) || mod.default;
+                    if (!ClerkCtor) { throw new Error('No se encontró la clase Clerk en el módulo ESM'); }
+                    window.__DESEO_CLERK_CTOR__ = ClerkCtor;
+
+                    await uiLoad; // asegurar la UI antes de load()
+                } catch (err) {
+                    console.error('❌ Error cargando Clerk (ESM/UI):', err);
+                }
+            })();
+        })();
     </script>
 
 
@@ -438,14 +486,14 @@
                 console.log('DeseoApp ya estaba inicializada.');
             }
             
-            // Función para esperar a que Clerk esté disponible
+            // Esperar a que la clase Clerk (ESM) esté disponible.
             async function waitForClerk() {
                 let attempts = 0;
-                const maxAttempts = 50; // 5 segundos máximo
+                const maxAttempts = 80; // 8 segundos máximo
                 
                 while (attempts < maxAttempts) {
-                    if (window.Clerk) {
-                        console.log('✅ Clerk SDK detected after', attempts * 100, 'ms');
+                    if (typeof window.__DESEO_CLERK_CTOR__ === 'function') {
+                        console.log('✅ Clerk (ESM) detected after', attempts * 100, 'ms');
                         return true;
                     }
                     await new Promise(resolve => setTimeout(resolve, 100));
@@ -457,12 +505,21 @@
             // Inicializar Clerk
             if (CONFIG.CLERK.enabled) {
                 console.log('⏳ Waiting for Clerk SDK to load...');
+                // Asegurar que el módulo ESM + bundle de UI terminaron de cargar.
+                if (window.__DESEO_CLERK_READY__) { await window.__DESEO_CLERK_READY__; }
                 const clerkAvailable = await waitForClerk();
                 
                 if (clerkAvailable) {
                     try {
-                        await window.Clerk.load();
-                        console.log('✅ Clerk SDK loaded successfully.');
+                        var clerkKey = window.__DESEO_CLERK_KEY__ || (CONFIG.CLERK.publishableKey || '');
+                        var ClerkCtor = window.__DESEO_CLERK_CTOR__;
+                        var uiCtor = window.__internal_ClerkUICtor;
+
+                        window.__DESEO_CLERK__ = new ClerkCtor(clerkKey);
+                        await window.__DESEO_CLERK__.load(uiCtor ? { ui: { ClerkUI: uiCtor } } : undefined);
+                        // Exponer como window.Clerk (instancia) para el resto del código.
+                        window.Clerk = window.__DESEO_CLERK__;
+                        console.log('✅ Clerk SDK loaded successfully.' + (uiCtor ? ' (UI bundle OK)' : ' (SIN UI bundle)'));
 
                         window.Clerk.addListener(({ user }) => {
                             if (user) {
@@ -495,7 +552,7 @@
                         console.error("❌ Error loading Clerk:", err);
                     }
                 } else {
-                    console.error("❌ Clerk SDK no se pudo cargar después de 5 segundos");
+                    console.error("❌ Clerk SDK no se pudo cargar después de 8 segundos");
                 }
             } else {
                 console.log("Clerk no está habilitado.");
