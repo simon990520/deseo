@@ -207,6 +207,7 @@ body.chats-page {
 }
 
 .chat-avatar {
+    position: relative;
     width: 50px;
     height: 50px;
     border-radius: 50%;
@@ -218,6 +219,39 @@ body.chats-page {
     font-size: 1.2rem;
     margin-right: 1rem;
     flex-shrink: 0;
+    overflow: hidden;
+}
+
+/* Foto de perfil dentro del avatar (cubre el ícono de respaldo) */
+.chat-avatar .avatar-img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
+    z-index: 1;
+}
+
+/* Punto de estado (en línea / desconectado) sobre el avatar */
+.chat-avatar .avatar-status-dot {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    border: 2px solid var(--background-secondary, #fff);
+    z-index: 2;
+    box-sizing: border-box;
+}
+
+.chat-avatar .avatar-status-dot.online {
+    background: var(--success-color, #22c55e);
+}
+
+.chat-avatar .avatar-status-dot.offline {
+    background: var(--text-light, #9ca3af);
 }
 
 .chat-info {
@@ -287,6 +321,19 @@ body.chats-page {
 
 .chat-status.typing {
     color: var(--primary-color);
+}
+
+.chat-status .chat-status-text {
+    font-size: 0.7rem;
+    white-space: nowrap;
+}
+
+/* En pantallas pequeñas, mostrar solo el punto de estado (sin texto)
+   para no saturar la columna derecha. */
+@media (max-width: 480px) {
+    .chat-status .chat-status-text {
+        display: none;
+    }
 }
 
 /* Estado vacío */

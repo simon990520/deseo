@@ -886,10 +886,6 @@ class ChatClient {
         }
         
         try {
-            const P = (window.DeseoPricing && window.DeseoPricing.get) ? window.DeseoPricing : null;
-            const COST = P ? P.get('encounterRequestCost', 100) : 100;
-            const CREDIT = P ? P.get('encounterRequestCredit', 100) : 100;
-
             const requestMessage = `🤝 **SOLICITUD DE ENCUENTRO**\n\n` +
                 `Título: ${title}\n` +
                 `Descripción: ${description}\n` +
@@ -1025,10 +1021,11 @@ class ChatClient {
         this._sendingTip = true;
         
         try {
-            const P = (window.DeseoPricing && window.DeseoPricing.get) ? window.DeseoPricing : null;
-            // Propina: el cliente elige el monto; el crédito al proveedor puede
-            // ser configurable (por defecto igual al monto). OpId único por operación.
-            const providerCredit = P ? P.get('tipProviderCredit', amount) : amount;
+            // Propina 1:1: el proveedor recibe EXACTAMENTE el monto que paga el
+            // cliente. NO usar un valor configurable distinto (eso causaba que el
+            // proveedor recibiera más de lo cobrado, p.ej. 100 cuando se pagaban 80).
+            // La comisión de plataforma se aplica después, en el retiro.
+            const providerCredit = amount;
             const opId = `tip_${this.chatId}_${Date.now()}_${Math.random().toString(36).slice(2,9)}`;
 
             // 1) Persistir el mensaje de propina PRIMERO (sin cobrar aún).

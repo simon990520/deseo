@@ -4727,6 +4727,9 @@ class DeseoApp {
             
             // Escuchar cambios en perfiles disponibles
             this.setupAvailableProfilesListeners();
+
+            // Marcar presencia del usuario (en línea / desconectado)
+            this.setupPresence();
             
         } catch (error) {
             console.error('❌ Error inicializando Firebase:', error);
@@ -4737,6 +4740,64 @@ class DeseoApp {
             console.error('🔍 [DEBUG] Firebase object:', firebase);
             console.error('🔍 [DEBUG] firebase.database:', firebase.database);
             this.showNotification(`Error Firebase: ${error.message} (${error.code || 'Sin código'})`, 'error');
+        }
+    }
+
+    // ===== PRESENCIA (EN LÍNEA / DESCONECTADO) =====
+    // NUEVO ENFOQUE: nodo DEDICADO `users/{id}/presence` con { online, lastActive }.
+    // Antes se escribía dentro de `users/{id}/profile`, pero ese nodo se
+    // SOBRESCRIBE al guardar el perfil (script-profile-complete.js hace
+    // update({ profile: ... })), borrando isOnline/lastActive y dejando a
+    // todos como desconectados. El nodo dedicado no se toca al guardar perfil.
+    // Marca al usuario como en línea y lo marca como desconectado
+    // automáticamente al cerrar la pestaña o perder conexión.
+    setupPresence() {
+        if (!this.database || !this.currentUser || !this.currentUser.id) {
+            // Si aún no hay usuario (login tardío), reintentar cuando cambie la sesión
+            if (!this._presenceRetryBound) {
+                this._presenceRetryBound = true;
+                window.addEventListener('authStateChanged', () => {
+                    if (this.currentUser && this.currentUser.id) {
+                        this.setupPresence();
+                    }
+                });
+            }
+            return;
+        }
+        try {
+            const uid = String(this.currentUser.id);
+            const presenceRef = this.database.ref(`users/${uid}/presence`);
+            const connectedRef = this.database.ref('.info/connected');
+
+            connectedRef.on('value', (snap) => {
+                if (snap.val() === true) {
+                    presenceRef.onDisconnect().set({
+                        online: false,
+                        lastActive: firebase.database.ServerValue.TIMESTAMP
+                    });
+                    presenceRef.set({
+                        online: true,
+                        lastActive: firebase.database.ServerValue.TIMESTAMP
+                    });
+                }
+            });
+
+            // Refrescar lastActive periódicamente mientras la pestaña está abierta
+            if (this.presenceInterval) clearInterval(this.presenceInterval);
+            this.presenceInterval = setInterval(() => {
+                try {
+                    presenceRef.update({
+                        online: true,
+                        lastActive: firebase.database.ServerValue.TIMESTAMP
+                    });
+                } catch (_) {}
+            }, 60000);
+
+            window.addEventListener('beforeunload', () => {
+                try { presenceRef.set({ online: false, lastActive: firebase.database.ServerValue.TIMESTAMP }); } catch (_) {}
+            });
+        } catch (e) {
+            console.warn('⚠️ No se pudo inicializar la presencia:', e);
         }
     }
 

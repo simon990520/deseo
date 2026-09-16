@@ -45,8 +45,130 @@ class ChatsManager {
         
         // Inicializar notificaciones
         await this.initializeNotifications();
+
+        // Marcar presencia del usuario actual (en línea / desconectado)
+        this.setupPresence();
         
         console.log('✅ ChatsManager: Inicializado correctamente');
+    }
+
+    // ===== PRESENCIA (EN LÍNEA / DESCONECTADO) =====
+    // NUEVO ENFOQUE: usamos un nodo DEDICADO `users/{id}/presence` con los
+    // campos { online, lastActive }. Antes se escribía dentro de
+    // `users/{id}/profile`, pero ese nodo se SOBRESCRIBE al guardar el perfil
+    // (script-profile-complete.js hace update({ profile: ... })), lo que
+    // borraba isOnline/lastActive y por eso todos aparecían desconectados.
+    // Usa .info/connected + onDisconnect() para marcar automáticamente al
+    // usuario como desconectado cuando cierra la pestaña o pierde conexión.
+    setupPresence() {
+        if (!this.database || !this.currentUser || !this.currentUser.id) return;
+        try {
+            const uid = String(this.currentUser.id);
+            const presenceRef = this.database.ref(`users/${uid}/presence`);
+            const connectedRef = this.database.ref('.info/connected');
+
+            connectedRef.on('value', (snap) => {
+                if (snap.val() === true) {
+                    // Al conectar: programar marcar offline al desconectar y luego marcar online
+                    presenceRef.onDisconnect().set({
+                        online: false,
+                        lastActive: firebase.database.ServerValue.TIMESTAMP
+                    });
+                    presenceRef.set({
+                        online: true,
+                        lastActive: firebase.database.ServerValue.TIMESTAMP
+                    });
+                }
+            });
+
+            // Refrescar lastActive periódicamente mientras la pestaña está abierta
+            if (this.presenceInterval) clearInterval(this.presenceInterval);
+            this.presenceInterval = setInterval(() => {
+                try {
+                    presenceRef.update({
+                        online: true,
+                        lastActive: firebase.database.ServerValue.TIMESTAMP
+                    });
+                } catch (_) {}
+            }, 60000);
+
+            // Al cerrar/ocultar la pestaña, marcar offline
+            window.addEventListener('beforeunload', () => {
+                try { presenceRef.set({ online: false, lastActive: firebase.database.ServerValue.TIMESTAMP }); } catch (_) {}
+            });
+        } catch (e) {
+            console.warn('⚠️ No se pudo inicializar la presencia:', e);
+        }
+    }
+
+    // Determina si un usuario está en línea a partir de su nodo de presencia.
+    // Acepta tanto el nodo dedicado { online, lastActive } como el formato
+    // antiguo dentro del perfil { isOnline, lastActive }.
+    // Considera en línea si online/isOnline === true o si lastActive es
+    // reciente (< 2 min).
+    isUserOnline(presence) {
+        if (!presence) return false;
+        if (presence.online === true || presence.isOnline === true) return true;
+        const last = presence.lastActive;
+        if (!last) return false;
+        const ts = typeof last === 'number' ? last : new Date(last).getTime();
+        if (!ts || isNaN(ts)) return false;
+        return (Date.now() - ts) < 2 * 60 * 1000; // 2 minutos
+    }
+
+    // ===== PRESENCIA EN TIEMPO REAL DE OTROS USUARIOS =====
+    // Escucha el nodo DEDICADO users/{userId}/presence en tiempo real para
+    // reflejar el estado en línea/desconectado de cada contacto sin recargar.
+    // Guarda las referencias para poder limpiarlas si es necesario.
+    watchUserPresence(userId, onUpdate) {
+        if (!this.database || !userId) return;
+        if (!this.presenceWatchers) this.presenceWatchers = {};
+        // Evitar duplicar listeners para el mismo usuario
+        if (this.presenceWatchers[userId]) {
+            // Ya hay un listener; registrar el callback adicional
+            this.presenceWatchers[userId].callbacks.push(onUpdate);
+            // Emitir el último valor conocido de inmediato
+            const last = this.presenceWatchers[userId].last;
+            if (last !== undefined) onUpdate(last);
+            return;
+        }
+
+        const watcher = { callbacks: [onUpdate], last: undefined, ref: null };
+        this.presenceWatchers[userId] = watcher;
+
+        try {
+            const presenceRef = this.database.ref(`users/${userId}/presence`);
+            watcher.ref = presenceRef;
+            presenceRef.on('value', (snap) => {
+                const presence = snap.val() || {};
+                const online = this.isUserOnline(presence);
+                watcher.last = online;
+                watcher.callbacks.forEach((cb) => {
+                    try { cb(online, presence); } catch (_) {}
+                });
+            }, (err) => {
+                console.warn('⚠️ No se pudo escuchar presencia de', userId, err && err.message);
+            });
+        } catch (e) {
+            console.warn('⚠️ Error configurando watcher de presencia:', e);
+        }
+    }
+
+    // Aplica el estado en línea/desconectado a los elementos del DOM de un chat.
+    applyOnlineState(els, online) {
+        if (!els) return;
+        if (els.statusDotEl) {
+            els.statusDotEl.classList.toggle('online', online);
+            els.statusDotEl.classList.toggle('offline', !online);
+            els.statusDotEl.title = online ? 'En línea' : 'Desconectado';
+        }
+        if (els.statusBoxEl) {
+            els.statusBoxEl.classList.toggle('online', online);
+            els.statusBoxEl.classList.toggle('offline', !online);
+        }
+        if (els.statusTextEl) {
+            els.statusTextEl.textContent = online ? 'En línea' : 'Desconectado';
+        }
     }
 
     async initializeFirebase() {
@@ -358,10 +480,11 @@ class ChatsManager {
             });
         }
 
-        // Limpiar lista
-        chatsList.innerHTML = '';
-
         if (filteredChats.length === 0) {
+            // Vaciar solo si había contenido, para no parpadear
+            if (chatsList.children.length > 0) {
+                chatsList.innerHTML = '';
+            }
             if (emptyState) {
                 emptyState.style.display = 'flex';
             }
@@ -372,11 +495,84 @@ class ChatsManager {
             emptyState.style.display = 'none';
         }
 
-        // Renderizar chats
+        // ===== RENDER INCREMENTAL (sin recargar toda la lista) =====
+        // Reutilizamos los nodos existentes por chat.id para evitar el
+        // "parpadeo/recarga" que provocaba innerHTML = '' en cada evento
+        // de Firebase (incluidos los mensajes nuevos).
+        if (!this._chatNodes) this._chatNodes = {};
+
+        const seenIds = new Set();
+        let previousNode = null;
+
         filteredChats.forEach(chat => {
-            const chatElement = this.createChatElement(chat);
-            chatsList.appendChild(chatElement);
+            const chatId = String(chat.id);
+            seenIds.add(chatId);
+
+            let node = this._chatNodes[chatId];
+            const existing = node && node.parentNode === chatsList;
+
+            if (existing) {
+                // Actualizar solo lo que cambia (último mensaje, hora, no leído)
+                this.updateChatElement(node, chat);
+            } else {
+                node = this.createChatElement(chat);
+                this._chatNodes[chatId] = node;
+            }
+
+            // Reordenar/insertar en la posición correcta sin recrear el nodo
+            const referenceNode = previousNode ? previousNode.nextSibling : chatsList.firstChild;
+            if (node !== referenceNode) {
+                chatsList.insertBefore(node, referenceNode);
+            }
+            previousNode = node;
         });
+
+        // Eliminar nodos de chats que ya no están en la lista filtrada
+        Object.keys(this._chatNodes).forEach(chatId => {
+            if (!seenIds.has(chatId)) {
+                const node = this._chatNodes[chatId];
+                if (node && node.parentNode) node.parentNode.removeChild(node);
+                delete this._chatNodes[chatId];
+            }
+        });
+    }
+
+    // Actualiza un nodo de chat existente sin recrearlo (evita parpadeo).
+    updateChatElement(node, chat) {
+        if (!node) return;
+        const hasUnread = this.hasUnreadMessages(chat);
+
+        node.classList.toggle('unread', hasUnread);
+        node.classList.toggle('archived', chat.status === 'archived');
+
+        const lastMsg = this.getLastMessage(chat);
+        const lastMessage = lastMsg ? (lastMsg.message || lastMsg.text || '') : 'No hay mensajes';
+        const lastMessageTime = lastMsg ?
+            this.formatTime(lastMsg.timestamp || lastMsg.createdAt) :
+            this.formatTime(chat.createdAt);
+        const isOwnLastMessage = !!(lastMsg && String(lastMsg.senderId) === String(this.currentUser && this.currentUser.id));
+        const lastMessagePrefix = isOwnLastMessage ? 'Tú: ' : '';
+
+        const msgEl = node.querySelector('.chat-last-message');
+        if (msgEl) msgEl.textContent = lastMessagePrefix + lastMessage;
+
+        const timeEl = node.querySelector('.chat-time');
+        if (timeEl) timeEl.textContent = lastMessageTime;
+
+        // Badge de no leído
+        const metaEl = node.querySelector('.chat-meta');
+        let badge = node.querySelector('.chat-unread-badge');
+        if (hasUnread && !badge && metaEl) {
+            badge = document.createElement('div');
+            badge.className = 'chat-unread-badge';
+            badge.textContent = '!';
+            metaEl.insertBefore(badge, metaEl.firstChild);
+        } else if (!hasUnread && badge) {
+            badge.remove();
+        }
+
+        // Mantener el handler de click actualizado con los datos más recientes
+        node._chatData = chat;
     }
 
     createChatElement(chat) {
@@ -394,47 +590,142 @@ class ChatsManager {
             div.classList.add('archived');
         }
 
-      const lastMessage = chat.lastMessage ? chat.lastMessage.message : 'No hay mensajes';
-        const lastMessageTime = chat.lastMessage ? 
-            this.formatTime(chat.lastMessage.timestamp) : 
+        // Resolver el último mensaje real. Muchos chats NO guardan el campo
+        // `lastMessage`; los mensajes viven en `chat.messages`. Por eso
+        // derivamos el último mensaje de ahí cuando `lastMessage` falta.
+        const lastMsg = this.getLastMessage(chat);
+        const lastMessage = lastMsg ? (lastMsg.message || lastMsg.text || '') : 'No hay mensajes';
+        const lastMessageTime = lastMsg ?
+            this.formatTime(lastMsg.timestamp || lastMsg.createdAt) :
             this.formatTime(chat.createdAt);
+
+        // Prefijo del último mensaje: "Tú: " si lo envió el usuario actual.
+        const isOwnLastMessage = !!(lastMsg && String(lastMsg.senderId) === String(this.currentUser && this.currentUser.id));
+        const lastMessagePrefix = isOwnLastMessage ? 'Tú: ' : '';
+
+        const isOnline = !!otherParticipant.isOnline;
 
         div.innerHTML = `
             <div class="chat-avatar">
                 <i class="fas fa-user"></i>
+                <span class="avatar-status-dot ${isOnline ? 'online' : 'offline'}" title="${isOnline ? 'En línea' : 'Desconectado'}"></span>
             </div>
             <div class="chat-info">
               <h3 class="chat-name">${this.escapeHtml(otherParticipant.name || 'Usuario')}</h3>
-                <p class="chat-last-message">${this.escapeHtml(lastMessage)}</p>
+                <p class="chat-last-message">${this.escapeHtml(lastMessagePrefix + lastMessage)}</p>
             </div>
             <div class="chat-meta">
                 <span class="chat-time">${lastMessageTime}</span>
                 ${hasUnread ? '<div class="chat-unread-badge">!</div>' : ''}
-                <div class="chat-status ${otherParticipant.isOnline ? 'online' : 'offline'}">
+                <div class="chat-status ${isOnline ? 'online' : 'offline'}">
                     <i class="fas fa-circle"></i>
+                    <span class="chat-status-text">${isOnline ? 'En línea' : 'Desconectado'}</span>
                 </div>
             </div>
         `;
 
-      // Resolver alias/apodo desde Firebase y actualizar el nombre mostrado
+      // Resolver alias/apodo, FOTO y ESTADO EN LÍNEA desde Firebase
       const nameEl = div.querySelector('.chat-name');
+      const avatarEl = div.querySelector('.chat-avatar');
+      const statusDotEl = div.querySelector('.avatar-status-dot');
+      const statusBoxEl = div.querySelector('.chat-status');
+      const statusTextEl = div.querySelector('.chat-status-text');
       const fallbackName = otherParticipant.name || 'Usuario';
-      if (nameEl && otherParticipant && otherParticipant.id) {
-          this.getDisplayNameForUser(otherParticipant.id, fallbackName)
-              .then((displayName) => {
-                  nameEl.textContent = displayName;
+      const statusEls = { statusDotEl, statusBoxEl, statusTextEl };
+      if (otherParticipant && otherParticipant.id) {
+          // 1) Datos estáticos (nombre/alias y foto) — una sola lectura cacheada
+          this.getProfileForUser(otherParticipant.id)
+              .then((profile) => {
+                  if (nameEl) {
+                      nameEl.textContent = this.resolveAliasFromProfile(profile, fallbackName);
+                  }
+                  const photoSrc = this.resolveProfilePhoto(profile);
+                  if (photoSrc && avatarEl && !avatarEl.querySelector('.avatar-img')) {
+                      const img = document.createElement('img');
+                      img.className = 'avatar-img';
+                      img.src = photoSrc;
+                      img.alt = fallbackName;
+                      img.loading = 'lazy';
+                      avatarEl.insertBefore(img, avatarEl.firstChild);
+                  }
+                  // Estado inicial desde el perfil cacheado
+                  this.applyOnlineState(statusEls, this.isUserOnline(profile));
               })
-              .catch(() => {
-                  // Mantener fallback silenciosamente
-              });
+              .catch(() => {});
+
+          // 2) Estado en línea/desconectado EN TIEMPO REAL (sin recargar)
+          this.watchUserPresence(otherParticipant.id, (online) => {
+              this.applyOnlineState(statusEls, online);
+          });
       }
 
-        // Agregar evento de click
+        // Agregar evento de click. Usamos node._chatData (actualizado en cada
+        // render incremental) para no abrir con datos obsoletos.
+        div._chatData = chat;
         div.addEventListener('click', () => {
-            this.openChat(chat);
+            this.openChat(div._chatData || chat);
         });
 
         return div;
+    }
+
+    // Devuelve el perfil completo del usuario (cacheado) desde Firebase.
+    // Reutiliza la misma estructura que getDisplayNameForUser para no
+    // duplicar lecturas: users/{id}/profile y fallback users/{id}.
+    async getProfileForUser(userId) {
+        if (!userId) return null;
+        if (this.userProfilesCache[userId]) return this.userProfilesCache[userId];
+        if (!this.database) return null;
+        try {
+            const profileRef = this.database.ref(`users/${userId}/profile`);
+            const snap = await profileRef.once('value');
+            let profileData = snap.val();
+            if (!profileData) {
+                const rootSnap = await this.database.ref(`users/${userId}`).once('value');
+                profileData = rootSnap.val();
+            }
+            if (profileData) {
+                this.userProfilesCache[userId] = profileData;
+                return profileData;
+            }
+        } catch (_) {
+            // Silencioso
+        }
+        return null;
+    }
+
+    // Resuelve la URL de la foto de perfil a partir del perfil del usuario.
+    // Soporta: profile.photos[0] (array), profile.profileImageUrl y objetos
+    // { url | src | base64 }. Devuelve una cadena lista para <img src> o null.
+    resolveProfilePhoto(profile) {
+        if (!profile) return null;
+        let rawPhoto = null;
+        if (profile.photos && Array.isArray(profile.photos) && profile.photos.length > 0) {
+            rawPhoto = profile.photos[0];
+        } else if (profile.profileImageUrl) {
+            rawPhoto = profile.profileImageUrl;
+        } else if (profile.photoURL) {
+            rawPhoto = profile.photoURL;
+        }
+        return this.toImageSrc(rawPhoto);
+    }
+
+    // Normaliza distintos formatos de imagen a una cadena válida para <img src>.
+    toImageSrc(input) {
+        if (!input) return null;
+        let value = input;
+        if (typeof input === 'object') {
+            if (typeof input.url === 'string') value = input.url;
+            else if (typeof input.src === 'string') value = input.src;
+            else if (typeof input.base64 === 'string') value = input.base64;
+            else if (Array.isArray(input) && input.length > 0) value = input[0];
+            else return null;
+        }
+        if (typeof value !== 'string') return null;
+        if (value.startsWith('data:image/')) return value;
+        if (value.startsWith('http') || value.startsWith('https')) return value;
+        if (value.length > 100 && !value.includes('http')) return `data:image/jpeg;base64,${value}`;
+        return null;
     }
 
     getOtherParticipant(chat) {
@@ -466,11 +757,40 @@ class ChatsManager {
     }
 
 
+    // Devuelve el último mensaje de un chat. Prioriza el campo `lastMessage`
+    // (si existe y tiene contenido) y, si no, lo deriva del subárbol
+    // `chat.messages` (que es donde realmente se guardan los mensajes).
+    getLastMessage(chat) {
+        if (!chat) return null;
+
+        // 1) Campo lastMessage explícito
+        if (chat.lastMessage && (chat.lastMessage.message || chat.lastMessage.text)) {
+            return chat.lastMessage;
+        }
+
+        // 2) Derivar del subárbol messages
+        if (chat.messages && typeof chat.messages === 'object') {
+            const messages = Object.values(chat.messages).filter(Boolean);
+            if (messages.length > 0) {
+                // Ordenar por timestamp/createdAt ascendente y tomar el último
+                messages.sort((a, b) => {
+                    const ta = new Date(a.timestamp || a.createdAt || 0).getTime();
+                    const tb = new Date(b.timestamp || b.createdAt || 0).getTime();
+                    return ta - tb;
+                });
+                return messages[messages.length - 1];
+            }
+        }
+
+        // 3) Si lastMessage existe aunque no tenga texto, devolverlo igual
+        return chat.lastMessage || null;
+    }
+
     hasUnreadMessages(chat) {
-        // Implementar lógica para detectar mensajes no leídos
-        // Por ahora, asumir que hay mensajes no leídos si el último mensaje no es del usuario actual
-        if (!chat.lastMessage) return false;
-        return chat.lastMessage.senderId !== this.currentUser.id;
+        // Hay mensajes no leídos si el último mensaje no es del usuario actual.
+        const lastMsg = this.getLastMessage(chat);
+        if (!lastMsg) return false;
+        return String(lastMsg.senderId) !== String(this.currentUser && this.currentUser.id);
     }
 
     openChat(chat) {
