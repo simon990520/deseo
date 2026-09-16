@@ -26,11 +26,12 @@ class ChatProvider {
         // Inicializar Firebase
         await this.initializeFirebase();
         
-        // Obtener datos del chat desde URL
-        this.getChatDataFromURL();
-        
-        // Cargar datos del usuario
+        // Cargar datos del usuario PRIMERO (necesario para reconstruir parámetros
+        // del chat desde Firebase si la URL llegó incompleta en deploy).
         await this.loadCurrentUser();
+        
+        // Obtener datos del chat desde URL (con respaldos handoff + Firebase)
+        await this.getChatDataFromURL();
         
         // Configurar listeners
         this.setupEventListeners();
@@ -70,6 +71,16 @@ class ChatProvider {
             this.firebase = firebase.initializeApp(CONFIG.FIREBASE.config);
             this.database = firebase.database();
             
+            // Cargar precios globales (settings/pricing) antes de cobrar.
+            try {
+                if (window.DeseoPricing && window.DeseoPricing.loadFromFirebase) {
+                    await window.DeseoPricing.loadFromFirebase(this.database);
+                }
+                if (window.DeseoPricing && window.DeseoPricing.subscribe && !this._pricingUnsub) {
+                    this._pricingUnsub = window.DeseoPricing.subscribe(this.database, function () {});
+                }
+            } catch (_) { /* usa defaults */ }
+            
             console.log('✅ Firebase inicializado en chat provider');
         } catch (error) {
             console.error('❌ Error inicializando Firebase:', error);
@@ -77,19 +88,114 @@ class ChatProvider {
         }
     }
 
-    getChatDataFromURL() {
+    async getChatDataFromURL() {
         const urlParams = new URLSearchParams(window.location.search);
-        this.chatId = urlParams.get('chatId');
-        this.otherUserId = urlParams.get('userId');
-        
+        let chatId = urlParams.get('chatId');
+        let otherUserId = urlParams.get('userId');
+
+        // Normalizar valores "undefined"/"null" que llegan como texto cuando el
+        // origen construyó la URL con variables vacías.
+        const isBad = (v) => !v || v === 'undefined' || v === 'null';
+        if (isBad(chatId)) chatId = null;
+        if (isBad(otherUserId)) otherUserId = null;
+
+        // RESPALDO 1 (robusto en deploy): si el host reescribió la URL y se perdió
+        // el query string, recuperamos los datos del handoff guardado antes de
+        // navegar. Probamos sessionStorage y, si no está, localStorage.
+        if (!chatId || !otherUserId) {
+            const handoff = this.readChatHandoff();
+            if (handoff) {
+                if (!chatId && handoff.chatId) chatId = String(handoff.chatId);
+                if (!otherUserId && handoff.otherUserId) otherUserId = String(handoff.otherUserId);
+                console.warn('⚠️ URL sin parámetros; recuperados del handoff:', { chatId, otherUserId });
+            }
+        }
+
+        this.chatId = chatId;
+        this.otherUserId = otherUserId;
+
+        // RESPALDO 2: reconstruir desde Firebase (fuente de verdad) antes de rendirnos.
+        await this.resolveChatParamsFromFirebase();
+
         if (!this.chatId || !this.otherUserId) {
-            console.error('❌ Faltan parámetros en la URL');
-            this.showError('Parámetros de chat no válidos');
+            console.error('❌ Faltan parámetros en la URL', {
+                chatId: urlParams.get('chatId'),
+                userId: urlParams.get('userId'),
+                search: window.location.search
+            });
+            // Recuperación: si se abrió el chat sin parámetros (p. ej. acceso
+            // directo o enlace roto), volvemos a la lista de chats en lugar de
+            // dejar la pantalla inutilizable.
+            this.showError('Abriendo la lista de chats...');
+            setTimeout(() => {
+                window.location.replace('chats.html');
+            }, 800);
             return;
         }
         
         console.log('📋 Datos del chat:', { chatId: this.chatId, otherUserId: this.otherUserId });
     }
+
+    // Lee el handoff guardado por chats.js antes de navegar (resiste el borrado
+    // del query string por parte del host de deploy).
+    readChatHandoff() {
+        const parse = (raw) => {
+            if (!raw) return null;
+            try { return JSON.parse(raw); } catch (_) { return null; }
+        };
+        try {
+            const s = parse(sessionStorage.getItem('deseo_chat_handoff'));
+            if (s && s.chatId && s.otherUserId) return s;
+        } catch (_) { /* noop */ }
+        try {
+            const l = parse(localStorage.getItem('deseo_chat_handoff'));
+            if (l && l.chatId && l.otherUserId) return l;
+        } catch (_) { /* noop */ }
+        return null;
+    }
+
+    // Reconstruye chatId/otherUserId consultando el chat en Firebase cuando la
+    // URL llegó incompleta. Firebase es la fuente de verdad de los participantes.
+    async resolveChatParamsFromFirebase() {
+        try {
+            if (!this.database || !this.currentUser || !this.currentUser.id) return;
+            const currentId = String(this.currentUser.id);
+
+            // Caso A: tenemos chatId, reconstruimos el otro usuario.
+            if (this.chatId && !this.otherUserId) {
+                const snap = await this.database.ref(`chats/${this.chatId}`).once('value');
+                const chat = snap.val();
+                const otherFromChat = this.pickOtherParticipant(chat, currentId);
+                if (otherFromChat) {
+                    this.otherUserId = otherFromChat;
+                    console.warn('🔁 otherUserId reconstruido desde el chat:', otherFromChat);
+                }
+            }
+
+            // Caso B: tenemos el otro usuario, reconstruimos el chatId determinista.
+            if (!this.chatId && this.otherUserId) {
+                const sortedIds = [currentId, String(this.otherUserId)].sort();
+                this.chatId = `chat_${sortedIds[0]}_${sortedIds[1]}`;
+                console.warn('🔁 chatId reconstruido:', this.chatId);
+            }
+        } catch (e) {
+            console.warn('No se pudieron reconstruir parámetros del chat:', e && e.message);
+        }
+    }
+
+    pickOtherParticipant(chat, currentId) {
+        if (!chat || !chat.participants) return null;
+        const entries = Object.entries(chat.participants);
+        const found = entries.find(([key, p]) => {
+            const pid = p && p.id != null ? String(p.id) : String(key);
+            return pid !== String(currentId);
+        });
+        if (!found) return null;
+        const [key, p] = found;
+        return p && p.id != null ? String(p.id) : String(key);
+    }
+
+
 
     async loadCurrentUser() {
         try {
@@ -589,17 +695,30 @@ class ChatProvider {
 
     async checkOrderCompletion(orderId) {
         const ref = this.database.ref(`encounterOrders/${orderId}`);
-        const snap = await ref.once('value');
-        const order = snap.val();
-        if (!order) return;
-        if (order.clientConfirmed && order.providerConfirmed && order.status === 'escrowed') {
-            await ref.update({ status: 'completed', updatedAt: new Date().toISOString() });
-            await this.sendCompletionMessage(order);
-            await this.promptOptionalRatings(order);
-            this.showNotification('Encuentro finalizado. El cliente verá que debe liberar los fondos (automático cuando ambos confirman).', 'success');
-            const btn = document.getElementById('completeEncounterBtn');
-            if (btn) btn.remove();
+        // Reclamo ATÓMICO escrowed→completed (una sola transición gana).
+        let claimed = false;
+        let order = null;
+        try {
+            const res = await ref.transaction(function (cur) {
+                if (!cur) return cur;
+                if (cur.status !== 'escrowed') return;
+                if (!(cur.clientConfirmed && cur.providerConfirmed)) return;
+                cur.status = 'completed';
+                cur.completedAt = new Date().toISOString();
+                cur.updatedAt = new Date().toISOString();
+                return cur;
+            });
+            claimed = !!(res && res.committed);
+            order = (res && res.snapshot) ? res.snapshot.val() : null;
+        } catch (e) {
+            console.error('❌ Error reclamando finalización (proveedor):', e);
         }
+        if (!claimed || !order) return;
+        await this.sendCompletionMessage(order);
+        await this.promptOptionalRatings(order);
+        this.showNotification('Encuentro finalizado. El cliente verá que debe liberar los fondos (automático cuando ambos confirman).', 'success');
+        const btn = document.getElementById('completeEncounterBtn');
+        if (btn) btn.remove();
     }
 
     renderCountdownBanner(orderId, providerConfirmedAt) {
@@ -757,10 +876,28 @@ class ChatProvider {
 
     async raiseDispute(orderId, reason) {
         const ref = this.database.ref(`encounterOrders/${orderId}`);
-        const snap = await ref.once('value');
-        const order = snap.val();
-        if (!order) return;
-        const disputeId = `dispute_${Date.now()}`;
+        // Transición atómica escrowed→disputed (evita disputar orden ya liberada).
+        const disputeId = `dispute_${orderId}`;
+        let order = null;
+        let claimed = false;
+        try {
+            const res = await ref.transaction(function (cur) {
+                if (!cur) return cur;
+                if (cur.status !== 'escrowed') return;
+                cur.status = 'disputed';
+                cur.disputeId = disputeId;
+                cur.updatedAt = new Date().toISOString();
+                return cur;
+            });
+            claimed = !!(res && res.committed);
+            order = (res && res.snapshot) ? res.snapshot.val() : null;
+        } catch (e) {
+            console.error('❌ Error abriendo disputa (proveedor):', e);
+        }
+        if (!claimed || !order) {
+            this.showNotification('No se puede abrir disputa: la orden ya no está en garantía.', 'info');
+            return;
+        }
         const dispute = {
             id: disputeId,
             orderId: order.id,
@@ -770,13 +907,12 @@ class ChatProvider {
             amount: order.escrowAmount,
             reason,
             createdBy: this.currentUser.id,
-            status: 'open',
+            status: 'open', // open | resolving | resolved | rejected
             createdAt: new Date().toISOString()
         };
         await this.database.ref(`disputes/${disputeId}`).set(dispute);
-        await ref.update({ status: 'disputed', updatedAt: new Date().toISOString(), disputeId });
-        await this.database.ref(`chats/${order.chatId}/messages/dispute_${Date.now()}`).set({
-            id: `dispute_${Date.now()}`,
+        await this.database.ref(`chats/${order.chatId}/messages/system_${disputeId}`).set({
+            id: `system_${disputeId}`,
             type: 'system',
             message: '⚠️ Se abrió una disputa para esta orden. Un administrador revisará el caso.',
             timestamp: new Date().toISOString()

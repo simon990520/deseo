@@ -137,6 +137,15 @@
             publishableKey: LOCAL.CLERK_PUBLISHABLE_KEY || 'pk_test_XXXXXXXX'
         },
 
+        // ===== API (backend serverless) =====
+        // Endpoints del backend. VERIFY_ENDPOINT valida el token de Clerk y
+        // devuelve { valid, userId, isAdmin } (isAdmin derivado de ADMIN_USER_IDS
+        // en el servidor). Se usa como segunda barrera del gate de admin.
+        API: {
+            BASE_URL: (LOCAL.API_BASE_URL || 'https://server-eo9ez6okm-koddio999s-projects.vercel.app'),
+            VERIFY_ENDPOINT: (LOCAL.API_VERIFY_ENDPOINT || 'https://server-eo9ez6okm-koddio999s-projects.vercel.app/api/auth/verify')
+        },
+
         // ===== ADMIN =====
         // Control de acceso al panel. Fail-closed: si estas listas están vacías,
         // admin.html queda bloqueado. Añade aquí los IDs/emails de administradores.
@@ -155,6 +164,176 @@
                 users: 'users',
                 conversations: 'conversations'
             }
+        },
+
+        // ===== PRECIOS CONFIGURABLES =====
+        // Estos son los valores POR DEFECTO (semilla). Se pueden sobrescribir
+        // en tiempo real desde `settings` (nodo `settings/pricing` en RTDB) o
+        // desde el panel de Configuración. El punto único de lectura es
+        // `DeseoPricing.get(...)` (ver utilidades abajo), NO accedas a
+        // CONFIG.PRICING directamente en el código de chat.
+        PRICING: {
+            // Chat / mensajes
+            messageClientCost: 390,     // lo que paga el cliente por mensaje
+            messageProviderCredit: 100, // lo que recibe el proveedor por mensaje
+            // Solicitud inmediata de encuentro ("enviar ahora")
+            encounterRequestCost: 100,
+            encounterRequestCredit: 100,
+            // Propinas
+            tipClientCost: 390,
+            tipProviderCredit: 100,
+            // Comisión de plataforma mostrada en UI (derivada, informativa)
+            currency: 'COP'
+        }
+    };
+
+    // ===== PRECIOS: RESOLUCIÓN CENTRALIZADA =====
+    // ÚNICO punto de verdad para precios. Fuente persistente: Firebase
+    // RTDB en `settings/pricing`. Prioridad: defaults (CONFIG.PRICING) <
+    // overrides inyectados (window.DESEO_PRICING_OVERRIDES, p.ej. config.local.js)
+    // < valores remotos cargados de Firebase (_pricingRemote, cache en memoria).
+    // Ya NO se usa localStorage para precios.
+    var _pricingRemote = null; // cache en memoria de settings/pricing
+
+    function _pricingOverrides() {
+        var out = {};
+        try {
+            var base = CONFIG.PRICING || {};
+            for (var k in base) { if (Object.prototype.hasOwnProperty.call(base, k)) out[k] = base[k]; }
+        } catch (_) {}
+        // 1) Overrides locales inyectados (config.local.js)
+        try {
+            var inj = (typeof window !== 'undefined' && window.DESEO_PRICING_OVERRIDES) || null;
+            if (inj) for (var k2 in inj) { if (Object.prototype.hasOwnProperty.call(inj, k2)) out[k2] = inj[k2]; }
+        } catch (_) {}
+        // 2) Valores remotos de Firebase (settings/pricing), ya sanitizados al cargar
+        try {
+            var rem = _pricingRemote;
+            if (rem) {
+                for (var k3 in rem) {
+                    if (!Object.prototype.hasOwnProperty.call(rem, k3)) continue;
+                    out[k3] = rem[k3];
+                }
+            }
+        } catch (_) {}
+        return out;
+    }
+
+    var PRICING_FIELDS = [
+        { key: 'messageClientCost', label: 'Precio por mensaje (cliente paga)', min: 0 },
+        { key: 'messageProviderCredit', label: 'Pago al proveedor por mensaje', min: 0 },
+        { key: 'encounterRequestCost', label: 'Solicitud de encuentro (cliente paga)', min: 0 },
+        { key: 'encounterRequestCredit', label: 'Pago al proveedor por solicitud', min: 0 },
+        { key: 'tipClientCost', label: 'Propina (cliente paga)', min: 0 },
+        { key: 'tipProviderCredit', label: 'Pago al proveedor por propina', min: 0 }
+    ];
+
+    // Normaliza un objeto de precios: solo claves numéricas >= 0 conocidas.
+    function _sanitizePricing(obj) {
+        var out = {};
+        if (!obj || typeof obj !== 'object') return out;
+        for (var i = 0; i < PRICING_FIELDS.length; i++) {
+            var key = PRICING_FIELDS[i].key;
+            if (!Object.prototype.hasOwnProperty.call(obj, key)) continue;
+            var v = obj[key];
+            var n = (typeof v === 'string') ? parseInt(v, 10) : v;
+            if (typeof n === 'number' && Number.isFinite(n) && n >= 0) out[key] = n;
+        }
+        return out;
+    }
+
+    var DeseoPricing = {
+        fields: PRICING_FIELDS,
+        defaults: function () {
+            var o = {};
+            for (var k in CONFIG.PRICING) { if (Object.prototype.hasOwnProperty.call(CONFIG.PRICING, k)) o[k] = CONFIG.PRICING[k]; }
+            return o;
+        },
+        all: function () { return _pricingOverrides(); },
+        get: function (key, fallback) {
+            var o = _pricingOverrides();
+            var v = o[key];
+            if (typeof v === 'number' && Number.isFinite(v)) return v;
+            if (typeof v === 'string' && v !== '' && Number.isFinite(parseInt(v, 10))) return parseInt(v, 10);
+            return (fallback !== undefined) ? fallback : 0;
+        },
+        // Comisión de plataforma por mensaje (derivada, informativa)
+        platformFee: function () {
+            return Math.max(0, this.get('messageClientCost', 0) - this.get('messageProviderCredit', 0));
+        },
+        // Aplica un objeto de precios a la cache en memoria (usado al cargar de Firebase).
+        applyRemote: function (obj) {
+            _pricingRemote = _sanitizePricing(obj);
+            return _pricingRemote;
+        },
+        // Guarda TODOS los precios en Firebase (settings/pricing). Devuelve true/false.
+        // values: objeto parcial; se fusiona con los valores actuales.
+        save: async function (db, values) {
+            if (!db || !db.ref) return false;
+            var current = _pricingOverrides();
+            var incoming = _sanitizePricing(values || {});
+            var merged = {};
+            for (var i = 0; i < PRICING_FIELDS.length; i++) {
+                var key = PRICING_FIELDS[i].key;
+                if (Object.prototype.hasOwnProperty.call(incoming, key)) merged[key] = incoming[key];
+                else if (typeof current[key] === 'number') merged[key] = current[key];
+            }
+            merged.updatedAt = new Date().toISOString();
+            try {
+                await db.ref('settings/pricing').set(merged);
+                _pricingRemote = merged;
+                return true;
+            } catch (e) {
+                console.error('❌ No se pudieron guardar los precios en Firebase:', e);
+                return false;
+            }
+        },
+        // Compatibilidad: set local solo en memoria (no persiste). Preferir save(db,...).
+        set: function (key, value) {
+            var n = (typeof value === 'string') ? parseInt(value, 10) : value;
+            if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) return false;
+            var current = _pricingRemote ? Object.assign({}, _pricingRemote) : {};
+            current[key] = n;
+            _pricingRemote = _sanitizePricing(current);
+            return true;
+        },
+        setMany: function (obj) {
+            var merged = Object.assign({}, _pricingRemote || {}, _sanitizePricing(obj || {}));
+            _pricingRemote = _sanitizePricing(merged);
+            return true;
+        },
+        // Descarta overrides remotos (vuelve a defaults/inyectados). No persiste.
+        reset: function () {
+            _pricingRemote = null;
+            return true;
+        },
+        // Carga precios desde Firebase (nodo settings/pricing).
+        // Los valores del servidor tienen prioridad sobre defaults/inyectados.
+        // Si no hay nodo, mantiene defaults y devuelve false.
+        loadFromFirebase: async function (db) {
+            if (!db || !db.ref) return false;
+            try {
+                var snap = await db.ref('settings/pricing').once('value');
+                var val = snap && snap.val ? snap.val() : null;
+                if (val && typeof val === 'object') {
+                    _pricingRemote = _sanitizePricing(val);
+                    return true;
+                }
+            } catch (e) { /* sin nodo o sin permisos: usar defaults */ }
+            return false;
+        },
+        // Escucha cambios en vivo de settings/pricing (multi-instancia/multi-admin).
+        subscribe: function (db, cb) {
+            if (!db || !db.ref) return null;
+            try {
+                var handler = function (snap) {
+                    var val = snap && snap.val ? snap.val() : null;
+                    _pricingRemote = (val && typeof val === 'object') ? _sanitizePricing(val) : null;
+                    if (typeof cb === 'function') cb(_pricingRemote);
+                };
+                db.ref('settings/pricing').on('value', handler);
+                return function () { try { db.ref('settings/pricing').off('value', handler); } catch (_) {} };
+            } catch (_) { return null; }
         }
     };
 
@@ -198,6 +377,7 @@
         window.isMapboxTokenConfigured = isMapboxTokenConfigured;
         window.getRandomAIResponse = getRandomAIResponse;
         window.debugLog = debugLog;
+        window.DeseoPricing = DeseoPricing;
 
         // Aviso único (sin ruido) si falta config.local.js
         if (!LOCAL.MAPBOX_TOKEN || !LOCAL.FIREBASE_CONFIG) {

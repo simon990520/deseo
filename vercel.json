@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "cleanUrls": false,
+  "trailingSlash": false,
+  "rewrites": [
+    { "source": "/chats", "destination": "/chats.html" },
+    { "source": "/chat-client", "destination": "/chat-client.html" },
+    { "source": "/chat-provider", "destination": "/chat-provider.html" }
+  ]
+}

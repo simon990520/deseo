@@ -205,8 +205,13 @@ class ChatsManager {
             console.log('📊 Datos de chats desde Firebase:', chatsData);
             
             if (chatsData) {
-                // Filtrar chats donde el usuario actual es participante
-                const allChats = Object.values(chatsData);
+                // Filtrar chats donde el usuario actual es participante.
+                // IMPORTANTE: inyectar la clave de Firebase como `id` para que los
+                // chats antiguos (que no guardaban el campo id) siempre tengan id.
+                const allChats = Object.entries(chatsData).map(([key, chat]) => ({
+                    ...chat,
+                    id: chat.id || key
+                }));
                 console.log('📋 Total de chats en Firebase:', allChats.length);
                 
                 this.chats = allChats
@@ -219,6 +224,7 @@ class ChatsManager {
                         });
                         return hasParticipant;
                     })
+
                     .sort((a, b) => {
                         const aTime = a.lastMessage ? new Date(a.lastMessage.timestamp) : new Date(a.createdAt);
                         const bTime = b.lastMessage ? new Date(b.lastMessage.timestamp) : new Date(b.createdAt);
@@ -252,9 +258,11 @@ class ChatsManager {
             const chatsData = snapshot.val();
             
             if (chatsData) {
-                const newChats = Object.values(chatsData)
+                const newChats = Object.entries(chatsData)
+                    .map(([key, chat]) => ({ ...chat, id: chat.id || key }))
                     .filter(chat => chat.participants && chat.participants[this.currentUser.id])
                     .sort((a, b) => {
+
                         const aTime = a.lastMessage ? new Date(a.lastMessage.timestamp) : new Date(a.createdAt);
                         const bTime = b.lastMessage ? new Date(b.lastMessage.timestamp) : new Date(b.createdAt);
                         return bTime - aTime;
@@ -430,9 +438,33 @@ class ChatsManager {
     }
 
     getOtherParticipant(chat) {
-        const participants = Object.values(chat.participants);
-      return participants.find(p => p.id !== this.currentUser.id) || { name: 'Usuario', isOnline: false };
+        // Usar las CLAVES del objeto participants (que son siempre los userIds)
+        // en lugar de confiar en el campo `id` interno, que puede faltar o venir
+        // con tipo distinto (string vs number). Así siempre devolvemos el otro
+        // participante con un id válido.
+        const participants = chat && chat.participants ? chat.participants : {};
+        const currentId = this.currentUser ? String(this.currentUser.id) : '';
+
+        const entries = Object.entries(participants);
+        const otherEntry = entries.find(([key, p]) => {
+            const pid = p && p.id != null ? String(p.id) : String(key);
+            return pid !== currentId;
+        });
+
+        if (otherEntry) {
+            const [key, p] = otherEntry;
+            return {
+                ...(p || {}),
+                id: (p && p.id != null) ? p.id : key,
+                name: (p && p.name) || 'Usuario',
+                isOnline: !!(p && p.isOnline)
+            };
+        }
+
+        // Fallback: no hay otro participante identificable
+        return { id: null, name: 'Usuario', isOnline: false };
     }
+
 
     hasUnreadMessages(chat) {
         // Implementar lógica para detectar mensajes no leídos
@@ -451,15 +483,46 @@ class ChatsManager {
         
         console.log('🔍 [DEBUG] Tipo de usuario determinado:', userType);
         console.log('🔍 [DEBUG] Redirigiendo a:', userType === 'provider' ? 'chat-provider.html' : 'chat-client.html');
-        
-        if (userType === 'provider') {
-            // El usuario actual es el proveedor, va a chat-provider.html
-            window.location.href = `chat-provider.html?chatId=${chat.id}&userId=${otherParticipant.id}`;
-        } else {
-            // El usuario actual es el cliente, va a chat-client.html
-            window.location.href = `chat-client.html?chatId=${chat.id}&userId=${otherParticipant.id}`;
+
+        // Validar que tengamos los parámetros necesarios antes de redirigir.
+        // Si falta el id del chat o del otro usuario, avisamos en vez de abrir
+        // una URL con "undefined" (que provoca "Faltan parámetros en la URL").
+        const chatId = chat && chat.id ? String(chat.id) : '';
+        const otherUserId = otherParticipant && otherParticipant.id != null ? String(otherParticipant.id) : '';
+
+        if (!chatId || !otherUserId) {
+            console.error('❌ No se puede abrir el chat: faltan datos', { chatId, otherUserId, chat });
+            this.showError('No se pudo abrir el chat (datos incompletos)');
+            return;
+        }
+
+        const targetPage = userType === 'provider' ? 'chat-provider.html' : 'chat-client.html';
+
+        // Handoff robusto: guardamos los parámetros en sessionStorage antes de
+        // navegar. Algunos hosts de deploy (y servidores de dev con "clean URLs")
+        // reescriben la URL y eliminan el query string (?chatId=...&userId=...),
+        // lo que dejaba la pantalla de chat sin datos. Con este respaldo, el chat
+        // puede recuperar el chatId/usuario aunque la URL llegue sin parámetros.
+        this.rememberChatHandoff({ chatId: chatId, otherUserId: otherUserId, target: targetPage });
+
+        window.location.href = `${targetPage}?chatId=${encodeURIComponent(chatId)}&userId=${encodeURIComponent(otherUserId)}`;
+    }
+
+    rememberChatHandoff(data) {
+        try {
+            const payload = {
+                chatId: data && data.chatId ? String(data.chatId) : null,
+                otherUserId: data && data.otherUserId ? String(data.otherUserId) : null,
+                target: data && data.target ? String(data.target) : null,
+                ts: Date.now()
+            };
+            sessionStorage.setItem('deseo_chat_handoff', JSON.stringify(payload));
+            localStorage.setItem('deseo_chat_handoff', JSON.stringify(payload));
+        } catch (_) {
+            // sessionStorage/localStorage pueden no estar disponibles (modo privado estricto).
         }
     }
+
 
     determineUserType(chat) {
         // Determinar si el usuario actual es el proveedor o el cliente

@@ -624,7 +624,8 @@ class InlineWalletManager {
         // Guardar el monto actual
         this.currentAmount = amount;
 
-        const currentTheme = document.documentElement.getAttribute('data-theme') || 
+        const currentTheme = document.documentElement.getAttribute('data-theme') ||
+                           localStorage.getItem('deseo_theme') ||
                            localStorage.getItem('deseo-theme') || 'dark';
         const isDarkMode = currentTheme === 'dark';
         
@@ -1259,6 +1260,10 @@ window.app.closeModal = (modalId) => {
         const modal = document.getElementById(modalId);
         if (modal) modal.style.display = 'none';
     }
+};
+window.app.openNavMenu = () => {
+    const navMenu = document.getElementById('navMenu');
+    if (navMenu) navMenu.style.display = 'block';
 };
 window.app.closeNavMenu = () => {
     const navMenu = document.getElementById('navMenu');

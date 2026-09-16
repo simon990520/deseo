@@ -4,7 +4,27 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Billetera - Deseo</title>
+    <!-- Anti-flash de tema: aplica el tema guardado antes de renderizar el body -->
+    <script>
+        (function () {
+            try {
+                var t = localStorage.getItem('deseo_theme');
+                if (!t) {
+                    var legacy = localStorage.getItem('deseo-theme');
+                    if (legacy === 'light' || legacy === 'dark') {
+                        t = legacy;
+                        localStorage.setItem('deseo_theme', legacy);
+                        localStorage.removeItem('deseo-theme');
+                    }
+                }
+                if (t !== 'light' && t !== 'dark') t = 'dark';
+                document.documentElement.setAttribute('data-theme', t);
+                document.documentElement.classList.toggle('dark-mode', t === 'dark');
+            } catch (e) {}
+        })();
+    </script>
     <link rel="stylesheet" href="styles.css">
+
     <link rel="stylesheet" href="wallet-styles.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
@@ -43,48 +63,43 @@
         };
     </script>
 
-    <!-- Navigation Menu -->
-    <nav class="nav-menu" id="navMenu" style="display: none;">
-        <div class="nav-content">
-            <div class="nav-header">
-                <div class="user-info" id="userInfo">
-                    <div class="user-avatar" id="userAvatar">
-                        <i class="fas fa-user"></i>
-                    </div>
-                    <div class="user-details">
-                        <h3 id="userName">Usuario</h3>
-                        <p id="userEmail">usuario@email.com</p>
-                    </div>
+    <!-- Contenedor principal del layout (mismo que index.html) -->
+    <div class="app-container">
+        <!-- Sidebar izquierdo (mismo header/menú que index.html) -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <i class="fas fa-compass"></i>
+                    <h1>Deseos</h1>
                 </div>
-                <button class="close-nav" onclick="app.closeNavMenu()">
-                    <i class="fas fa-times"></i>
-                </button>
+                <div class="header-actions">
+                    <button class="sidebar-toggle" id="sidebarToggle">
+                        <i class="fas fa-bars"></i>
+                    </button>
+                </div>
             </div>
-            <div class="nav-items">
-                <a href="index.html" class="nav-item">
-                    <i class="fas fa-home"></i>
-                    <span>Inicio</span>
-                </a>
-                <a href="wallet.html" class="nav-item active">
-                    <i class="fas fa-wallet"></i>
-                    <span>Billetera</span>
-                </a>
-                <a href="settings.html" class="nav-item">
-                    <i class="fas fa-cog"></i>
-                    <span>Configuración</span>
-                </a>
-                <hr class="nav-divider">
-                <a href="#" class="nav-item" onclick="app.logout()">
-                    <i class="fas fa-sign-out-alt"></i>
-                    <span>Cerrar Sesión</span>
-                </a>
-            </div>
-        </div>
-    </nav>
+            <nav class="main-nav" id="mainNav">
+                <ul>
+                    <li><a href="#" id="authButton"><i class="fas fa-user"></i> Iniciar Sesión</a></li>
+                    <li><a href="index.html"><i class="fas fa-home"></i> Inicio</a></li>
+                    <li><a href="chats.html"><i class="fas fa-comments"></i> Chats</a></li>
+                    <li><a href="wallet.html" class="active"><i class="fas fa-wallet"></i> Billetera</a></li>
+                    <li><a href="settings.html"><i class="fas fa-cog"></i> Configuración</a></li>
+                    <li><a href="#" id="themeToggle"><i class="fas fa-moon"></i> Tema</a></li>
+                </ul>
+            </nav>
+        </aside>
 
-    <!-- Main Content -->
-    <main class="main-container">
-        <div class="page-container">
+        <!-- Área principal -->
+        <main class="main-content">
+            <div class="content-header">
+                <button class="back-btn" onclick="goBack()">
+                    <i class="fas fa-arrow-left"></i>
+                </button>
+                <h1><i class="fas fa-wallet"></i> Billetera</h1>
+            </div>
+
+            <div class="page-container">
             <div class="page-header">
                 <h2><i class="fas fa-wallet"></i> Mi Billetera</h2>
                 <p>Gestiona tus finanzas y transacciones</p>
@@ -117,8 +132,8 @@
                     <h3>Historial de Transacciones</h3>
                     <div class="filter-tabs">
                         <button class="filter-tab active" data-filter="all">Todas</button>
-                        <button class="filter-tab" data-filter="income">Ingresos</button>
-                        <button class="filter-tab" data-filter="expense">Gastos</button>
+                        <button class="filter-tab" data-filter="income">Recargas</button>
+                        <button class="filter-tab" data-filter="expense">Retiros</button>
                         <button class="filter-tab" data-filter="micro">Microtransacciones</button>
                     </div>
                 </div>
@@ -129,8 +144,9 @@
                     <!-- Las microtransacciones se cargarán aquí -->
                 </div>
             </div>
-        </div>
-    </main>
+            </div>
+        </main>
+    </div>
 
     <!-- Modal para agregar dinero -->
     <div class="modal" id="addMoneyModal">
@@ -236,5 +252,58 @@
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
     
     <script src="wallet-inline.js"></script>
+
+    <!-- Sidebar / menú (mismo comportamiento que index.html) -->
+    <script>
+        (function () {
+            function isMobile() {
+                return window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
+            }
+
+            function toggleSidebarMenu() {
+                var mainNav = document.getElementById('mainNav');
+                var sidebarToggle = document.getElementById('sidebarToggle');
+                if (!mainNav) return;
+
+                if (isMobile()) {
+                    // En móvil el estado real lo manda body.mobile-menu-open
+                    // (styles.css muestra .main-nav a pantalla completa con esa clase).
+                    var isOpen = document.body.classList.contains('mobile-menu-open');
+                    if (isOpen) {
+                        document.body.classList.remove('mobile-menu-open');
+                        mainNav.classList.add('hidden');
+                        if (sidebarToggle) sidebarToggle.innerHTML = '<i class="fas fa-bars"></i>';
+                    } else {
+                        mainNav.classList.remove('hidden');
+                        document.body.classList.add('mobile-menu-open');
+                        if (sidebarToggle) sidebarToggle.innerHTML = '<i class="fas fa-times"></i>';
+                    }
+                } else {
+                    // En escritorio se alterna la clase .hidden.
+                    var isHidden = mainNav.classList.contains('hidden');
+                    if (isHidden) {
+                        mainNav.classList.remove('hidden');
+                    } else {
+                        mainNav.classList.add('hidden');
+                    }
+                }
+            }
+
+            function goBack() { window.history.back(); }
+            window.goBack = goBack;
+
+            document.addEventListener('DOMContentLoaded', function () {
+                var sidebarToggle = document.getElementById('sidebarToggle');
+                if (sidebarToggle) sidebarToggle.addEventListener('click', toggleSidebarMenu);
+
+                // El botón de tema (#themeToggle) lo gestiona theme-manager.js
+                // (fuente única de verdad), por lo que aquí NO se enlaza.
+
+                // En móvil el menú arranca cerrado (styles.css lo oculta por defecto).
+                var mainNav = document.getElementById('mainNav');
+                if (mainNav && isMobile()) mainNav.classList.add('hidden');
+            });
+        })();
+    </script>
 </body>
 </html>

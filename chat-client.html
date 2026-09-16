@@ -4,7 +4,27 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Chat - Cliente | Deseo</title>
+    <!-- Anti-flash de tema: aplica el tema guardado antes de renderizar el body -->
+    <script>
+        (function () {
+            try {
+                var t = localStorage.getItem('deseo_theme');
+                if (!t) {
+                    var legacy = localStorage.getItem('deseo-theme');
+                    if (legacy === 'light' || legacy === 'dark') {
+                        t = legacy;
+                        localStorage.setItem('deseo_theme', legacy);
+                        localStorage.removeItem('deseo-theme');
+                    }
+                }
+                if (t !== 'light' && t !== 'dark') t = 'dark';
+                document.documentElement.setAttribute('data-theme', t);
+                document.documentElement.classList.toggle('dark-mode', t === 'dark');
+            } catch (e) {}
+        })();
+    </script>
     <link rel="stylesheet" href="styles.css">
+
     <link rel="stylesheet" href="chat-styles.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">

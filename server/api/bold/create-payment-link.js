@@ -1,34 +1,46 @@
 // server/api/bold/create-payment-link.js
 // Serverless (Vercel/Netlify-style). Requiere BOLD_API_KEY en variables de entorno.
+const { requireAuth } = require('../_lib/auth.js');
+
 const ALLOWED_ORIGINS = [
     'https://simon990520.github.io',
     'http://localhost:3000',
     'http://localhost:5173'
 ];
 
+// Devuelve el origen permitido o null si no está autorizado (no hace fallback silencioso).
 function resolveOrigin(origin) {
-    if (!origin) return ALLOWED_ORIGINS[0];
-    if (ALLOWED_ORIGINS.includes(origin)) return origin;
-    // Permitir cualquier subruta de github.io del proyecto si hiciera falta ampliar:
-    return ALLOWED_ORIGINS[0];
+    if (!origin) return null;
+    return ALLOWED_ORIGINS.includes(origin) ? origin : null;
 }
 
 module.exports = async (req, res) => {
     const origin = req.headers.origin;
     const allowed = resolveOrigin(origin);
-    res.setHeader('Access-Control-Allow-Origin', allowed);
-    res.setHeader('Vary', 'Origin');
+    if (allowed) {
+        res.setHeader('Access-Control-Allow-Origin', allowed);
+        res.setHeader('Vary', 'Origin');
+    }
     res.setHeader('Access-Control-Allow-Credentials', 'false');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Requested-With');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Requested-With, Authorization');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
 
     if (req.method === 'OPTIONS') {
         return res.status(204).end();
     }
 
+    // Rechazar orígenes no autorizados (evita que terceros usen el endpoint).
+    if (origin && !allowed) {
+        return res.status(403).json({ error: 'Origin not allowed' });
+    }
+
     if (req.method !== 'POST') {
         return res.status(405).json({ error: 'Method Not Allowed' });
     }
+
+    // SEGURIDAD: exigir sesión autenticada (token Clerk) antes de crear el link.
+    const auth = await requireAuth(req, res);
+    if (!auth) return; // requireAuth ya respondió 401.
 
     try {
         const body = req.body || {};

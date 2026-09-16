@@ -4,7 +4,27 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Configuración - Deseo</title>
+    <!-- Anti-flash de tema: aplica el tema guardado antes de renderizar el body -->
+    <script>
+        (function () {
+            try {
+                var t = localStorage.getItem('deseo_theme');
+                if (!t) {
+                    var legacy = localStorage.getItem('deseo-theme');
+                    if (legacy === 'light' || legacy === 'dark') {
+                        t = legacy;
+                        localStorage.setItem('deseo_theme', legacy);
+                        localStorage.removeItem('deseo-theme');
+                    }
+                }
+                if (t !== 'light' && t !== 'dark') t = 'dark';
+                document.documentElement.setAttribute('data-theme', t);
+                document.documentElement.classList.toggle('dark-mode', t === 'dark');
+            } catch (e) {}
+        })();
+    </script>
     <link rel="stylesheet" href="styles.css">
+
     <link rel="stylesheet" href="profile-styles.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
@@ -22,7 +42,7 @@
                     <i class="fas fa-bars"></i>
                 </button>
             </div>
-            <nav class="main-nav hidden">
+            <nav class="main-nav" id="mainNav">
                 <ul>
                     <li><a href="#" id="authButton"><i class="fas fa-user"></i> Iniciar Sesión</a></li>
                     <li><a href="index.html"><i class="fas fa-home"></i> Inicio</a></li>
@@ -34,6 +54,19 @@
             </nav>
         </aside>
 
+        <!-- Menú: desplegado por defecto en escritorio; oculto por defecto en móvil -->
+        <script>
+            (function () {
+                try {
+                    var isMobile = window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
+                    var nav = document.getElementById('mainNav');
+                    if (nav && isMobile) {
+                        nav.classList.add('hidden');
+                    }
+                } catch (e) {}
+            })();
+        </script>
+
         <!-- Área principal -->
         <main class="main-content">
             <div class="content-header">
@@ -44,18 +77,136 @@
             </div>
 
             <div class="settings-container">
-                <div class="settings-section">
+                <!-- 1) PERFIL: nombre del perfil guardado en Firebase (editable) -->
+                <div class="settings-section" id="profileSection">
                     <h2><i class="fas fa-user"></i> Perfil</h2>
                     <div class="setting-item">
-                        <label>Nombre</label>
-                        <input type="text" id="userName" placeholder="Tu nombre">
+                        <label for="profileNickname">Nombre del perfil</label>
+                        <input type="text" id="profileNickname" placeholder="Tu nombre de perfil">
                     </div>
                     <div class="setting-item">
                         <label>Email</label>
-                        <input type="email" id="userEmail" placeholder="tu@email.com">
+                        <span class="version" id="profileEmail">—</span>
                     </div>
+                    <div class="setting-item setting-item-actions">
+                        <button id="saveProfileBtn" class="btn-primary" onclick="saveProfileName()">
+                            <i class="fas fa-save"></i> Guardar perfil
+                        </button>
+                    </div>
+                    <p id="profileSummary" class="pricing-summary"></p>
                 </div>
 
+                <!-- 2) PRECIO DE TUS MENSAJES -->
+                <div class="settings-section pricing-section" id="pricingSection">
+                    <div class="pricing-header">
+                        <div class="pricing-header-icon">
+                            <i class="fas fa-tags"></i>
+                        </div>
+                        <div class="pricing-header-text">
+                            <h2>Precio de tus mensajes</h2>
+                            <p>Define cuánto cuesta enviar un mensaje y cuánto recibe quien lo atiende.</p>
+                        </div>
+                    </div>
+
+                    <!-- Tarjeta destacada: precio por mensaje -->
+                    <div class="pricing-hero">
+                        <div class="pricing-hero-main">
+                            <span class="pricing-hero-label">Precio por mensaje</span>
+                            <div class="pricing-hero-value">
+                                <span class="pricing-hero-currency">$</span>
+                                <span id="heroMessagePrice">390</span>
+                                <span class="pricing-hero-unit">COP</span>
+                            </div>
+                        </div>
+                        <div class="pricing-hero-breakdown">
+                            <div class="pricing-breakdown-item">
+                                <span class="pricing-breakdown-dot client"></span>
+                                <span class="pricing-breakdown-label">Cliente paga</span>
+                                <strong id="heroClientPays">$390</strong>
+                            </div>
+                            <div class="pricing-breakdown-item">
+                                <span class="pricing-breakdown-dot provider"></span>
+                                <span class="pricing-breakdown-label">Proveedor recibe</span>
+                                <strong id="heroProviderGets">$100</strong>
+                            </div>
+                            <div class="pricing-breakdown-item">
+                                <span class="pricing-breakdown-dot fee"></span>
+                                <span class="pricing-breakdown-label">Comisión plataforma</span>
+                                <strong id="heroPlatformFee">$290</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Control principal: precio por mensaje -->
+                    <div class="pricing-control">
+                        <div class="pricing-control-head">
+                            <label for="messageClientCostRange">Precio por mensaje (cliente paga)</label>
+                            <div class="pricing-input-wrap">
+                                <span class="pricing-input-prefix">$</span>
+                                <input type="number" id="messageClientCost" min="0" step="10" value="390"
+                                       data-pricing-key="messageClientCost" inputmode="numeric">
+                            </div>
+                        </div>
+                        <input type="range" id="messageClientCostRange" class="pricing-range"
+                               min="0" max="5000" step="10" value="390">
+                        <div class="pricing-range-scale">
+                            <span>$0</span><span>$2.500</span><span>$5.000</span>
+                        </div>
+                    </div>
+
+                    <!-- Control: pago al proveedor -->
+                    <div class="pricing-control">
+                        <div class="pricing-control-head">
+                            <label for="messageProviderCreditRange">Pago al proveedor por mensaje</label>
+                            <div class="pricing-input-wrap">
+                                <span class="pricing-input-prefix">$</span>
+                                <input type="number" id="messageProviderCredit" min="0" step="10" value="100"
+                                       data-pricing-key="messageProviderCredit" inputmode="numeric">
+                            </div>
+                        </div>
+                        <input type="range" id="messageProviderCreditRange" class="pricing-range"
+                               min="0" max="5000" step="10" value="100">
+                        <div class="pricing-range-scale">
+                            <span>$0</span><span>$2.500</span><span>$5.000</span>
+                        </div>
+                    </div>
+
+                    <!-- Ajustes avanzados (colapsable) -->
+                    <details class="pricing-advanced">
+                        <summary>
+                            <i class="fas fa-sliders-h"></i> Ajustes avanzados
+                            <i class="fas fa-chevron-down pricing-advanced-chevron"></i>
+                        </summary>
+                        <div class="pricing-advanced-body" id="pricingFields"></div>
+                    </details>
+
+                    <div class="pricing-actions">
+                        <button id="savePricingBtn" class="btn-primary" onclick="savePricing()">
+                            <i class="fas fa-save"></i> Guardar precios
+                        </button>
+                        <button class="btn-secondary" onclick="resetPricing()">
+                            <i class="fas fa-rotate-left"></i> Restaurar por defecto
+                        </button>
+                    </div>
+                    <p id="pricingSummary" class="pricing-summary"></p>
+                </div>
+
+                <!-- 3) MIS FOTOS: fotos guardadas en el perfil (actualizables) -->
+                <div class="settings-section" id="photosSection">
+                    <h2><i class="fas fa-images"></i> Mis fotos</h2>
+                    <p class="settings-hint">Estas son las fotos guardadas en tu perfil. Puedes reemplazar o eliminar cada una.</p>
+                    <div id="photosGrid" class="settings-photos-grid">
+                        <!-- Las fotos se cargan dinámicamente -->
+                    </div>
+                    <div class="setting-item setting-item-actions">
+                        <button id="savePhotosBtn" class="btn-primary" onclick="saveProfilePhotos()">
+                            <i class="fas fa-save"></i> Guardar fotos
+                        </button>
+                    </div>
+                    <p id="photosSummary" class="pricing-summary"></p>
+                </div>
+
+                <!-- 4) NOTIFICACIONES -->
                 <div class="settings-section">
                     <h2><i class="fas fa-bell"></i> Notificaciones</h2>
                     <div class="setting-item">
@@ -68,18 +219,7 @@
                     </div>
                 </div>
 
-                <div class="settings-section">
-                    <h2><i class="fas fa-shield-alt"></i> Privacidad</h2>
-                    <div class="setting-item">
-                        <label>Perfil público</label>
-                        <input type="checkbox" id="publicProfile" checked>
-                    </div>
-                    <div class="setting-item">
-                        <label>Mostrar ubicación</label>
-                        <input type="checkbox" id="showLocation" checked>
-                    </div>
-                </div>
-
+                <!-- 5) INFORMACIÓN -->
                 <div class="settings-section">
                     <h2><i class="fas fa-info-circle"></i> Información</h2>
                     <div class="setting-item">
@@ -100,8 +240,75 @@
     <script src="security-utils.js"></script>
     <script src="session-utils.js"></script>
     <script src="config.js"></script>
+    <!-- Firebase SDKs (para precios configurables en settings/pricing) -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
     <script src="log-utils.js"></script>
     <script src="theme-manager.js"></script>
+
+    <!-- Clerk SDK (solo para detectar si el usuario es admin). NO se usa el gate
+         bloqueante de admin.html: la página de settings debe seguir visible para
+         todos; solo la sección de Precios se muestra a administradores. -->
+    <script>
+        (function () {
+            var CLERK_KEY = (window.CONFIG && CONFIG.CLERK)
+                ? (CONFIG.CLERK.publishableKey || CONFIG.CLERK.PUBLISHABLE_KEY)
+                : '';
+            if (!CLERK_KEY || /XXXX/.test(CLERK_KEY)) {
+                window.__DESEO_CLERK_READY__ = Promise.resolve(null);
+                return;
+            }
+            window.__DESEO_CLERK_KEY__ = CLERK_KEY;
+            var domain = '';
+            try { domain = atob(CLERK_KEY.split('_')[2]).slice(0, -1); } catch (e) { domain = ''; }
+
+            function loadScript(src) {
+                return new Promise(function (res, rej) {
+                    var s = document.createElement('script');
+                    s.src = src; s.onload = res; s.onerror = rej;
+                    document.head.appendChild(s);
+                });
+            }
+
+            window.__DESEO_CLERK_READY__ = (async function () {
+                try {
+                    if (domain) { try { await loadScript('https://' + domain + '/npm/@clerk/ui@1/dist/ui.browser.js'); } catch (e) {} }
+                    var mod = await import('https://cdn.jsdelivr.net/npm/@clerk/clerk-js@6.31.1/+esm');
+                    var ClerkCtor = mod.Clerk || (mod.default && mod.default.Clerk) || mod.default;
+                    if (!ClerkCtor) return null;
+                    var clerk = new ClerkCtor(CLERK_KEY);
+                    var uiCtor = window.__internal_ClerkUICtor;
+                    await clerk.load(uiCtor ? { ui: { ClerkUI: uiCtor } } : undefined);
+                    window.Clerk = clerk;
+                    // Evaluar rol admin de forma no bloqueante.
+                    var u = clerk.user;
+                    if (u) {
+                        var roleKey = ((window.CONFIG && CONFIG.ADMIN && CONFIG.ADMIN.roleKey) || 'role');
+                        var required = ((window.CONFIG && CONFIG.ADMIN && CONFIG.ADMIN.requiredRole) || 'admin');
+                        var ids = (window.CONFIG && CONFIG.ADMIN && CONFIG.ADMIN.authorizedUserIds) || [];
+                        var emails = (window.CONFIG && CONFIG.ADMIN && CONFIG.ADMIN.authorizedEmails) || [];
+                        var meta = u.publicMetadata || {};
+                        var priv = u.privateMetadata || {};
+                        var email = (u.primaryEmailAddress && u.primaryEmailAddress.emailAddress || '').toLowerCase();
+                        var ok = (ids.indexOf(u.id) !== -1) ||
+                                 (email && emails.indexOf(email) !== -1) ||
+                                 (meta[roleKey] === required) || (priv[roleKey] === required);
+                        if (ok) {
+                            window.__DESEO_ADMIN_GRANTED__ = true;
+                        } else {
+                            window.__DESEO_ADMIN_DENIED__ = true;
+                        }
+                    }
+                    document.dispatchEvent(new CustomEvent('deseoClerkReady'));
+                    return clerk;
+                } catch (err) {
+                    console.warn('⚠️ Clerk no disponible en settings:', err && err.message);
+                    document.dispatchEvent(new CustomEvent('deseoClerkReady'));
+                    return null;
+                }
+            })();
+        })();
+    </script>
     <script src="script-settings.js"></script>
 </body>
 </html>

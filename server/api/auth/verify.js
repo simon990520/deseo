@@ -46,6 +46,24 @@ async function verifyJwt(token) {
     // Comprobar expiración
     const now = Math.floor(Date.now() / 1000);
     if (payload.exp && payload.exp < now) throw new Error('Token expired');
+    // Comprobar "not before" si está presente.
+    if (payload.nbf && payload.nbf > now + 60) throw new Error('Token not yet valid');
+
+    // SEGURIDAD: validar emisor (iss) y audiencia (aud) para evitar aceptar
+    // tokens de otra aplicación Clerk firmados con la misma clave.
+    const issuer = process.env.CLERK_ISSUER;
+    if (issuer) {
+        const expectedIss = issuer.replace(/\/$/, '');
+        const tokenIss = String(payload.iss || '').replace(/\/$/, '');
+        if (tokenIss !== expectedIss) throw new Error('Invalid issuer');
+    }
+    // Audiencia esperada (opcional): CLERK_AUDIENCE o CLERK_JWT_AUDIENCE.
+    const expectedAud = process.env.CLERK_AUDIENCE || process.env.CLERK_JWT_AUDIENCE;
+    if (expectedAud) {
+        const aud = payload.aud;
+        const audOk = Array.isArray(aud) ? aud.includes(expectedAud) : aud === expectedAud;
+        if (!audOk) throw new Error('Invalid audience');
+    }
 
     const keys = await getJwks();
     const jwk = keys.find(k => k.kid === header.kid);

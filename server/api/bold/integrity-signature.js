@@ -2,6 +2,7 @@
 // Genera la firma de integridad HMAC/SHA256 requerida por Bold.
 // Requiere BOLD_SECRET_KEY en variables de entorno. NUNCA loguear la llave.
 const crypto = require('crypto');
+const { requireAuth } = require('../_lib/auth.js');
 
 const ALLOWED_ORIGINS = [
     'https://simon990520.github.io',
@@ -9,10 +10,10 @@ const ALLOWED_ORIGINS = [
     'http://localhost:5173'
 ];
 
+// Devuelve el origen permitido o null si no está autorizado (sin fallback silencioso).
 function resolveOrigin(origin) {
-    if (!origin) return ALLOWED_ORIGINS[0];
-    if (ALLOWED_ORIGINS.includes(origin)) return origin;
-    return ALLOWED_ORIGINS[0];
+    if (!origin) return null;
+    return ALLOWED_ORIGINS.includes(origin) ? origin : null;
 }
 
 function generateBoldIntegrityHash(attributes, secretKey) {
@@ -38,19 +39,31 @@ function generateBoldIntegrityHash(attributes, secretKey) {
 
 module.exports = async (req, res) => {
     const origin = req.headers.origin;
-    res.setHeader('Access-Control-Allow-Origin', resolveOrigin(origin));
-    res.setHeader('Vary', 'Origin');
+    const allowed = resolveOrigin(origin);
+    if (allowed) {
+        res.setHeader('Access-Control-Allow-Origin', allowed);
+        res.setHeader('Vary', 'Origin');
+    }
     res.setHeader('Access-Control-Allow-Credentials', 'false');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Requested-With');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Requested-With, Authorization');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
 
     if (req.method === 'OPTIONS') {
         return res.status(204).end();
     }
 
+    // Rechazar orígenes no autorizados.
+    if (origin && !allowed) {
+        return res.status(403).json({ error: 'Origin not allowed' });
+    }
+
     if (req.method !== 'POST') {
         return res.status(405).json({ error: 'Method Not Allowed' });
     }
+
+    // SEGURIDAD: exigir sesión autenticada antes de emitir firmas de integridad.
+    const auth = await requireAuth(req, res);
+    if (!auth) return; // requireAuth ya respondió 401.
 
     try {
         const { attributes } = req.body || {};

@@ -35,3 +35,17 @@ desktop.ini
 # ===== Vercel / Netlify =====
 .vercel/
 .netlify/
+
+# ===== Archivos temporales de depuración / pruebas =====
+_dbg*.js
+_suite*.js
+_suite*.txt
+_test_*.js
+_verify_*.js
+_flows*.txt
+_final_*.txt
+temp_end.txt
+
+
+
+

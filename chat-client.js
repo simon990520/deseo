@@ -25,14 +25,19 @@ class ChatClient {
     async init() {
         console.log('🔍 ChatClient: Inicializando...');
         
+        // Delegación de envío lo ANTES posible (idempotente). Así el botón y
+        // Enter funcionan desde el inicio sin esperar a loadMessages/perfil.
+        this.setupRobustSendDelegation();
+        
         // Inicializar Firebase
         await this.initializeFirebase();
         
-        // Obtener datos del chat desde URL
-        this.getChatDataFromURL();
-        
-        // Cargar datos del usuario
+        // Cargar datos del usuario PRIMERO (necesario para reconstruir parámetros
+        // del chat desde Firebase si la URL llegó incompleta en deploy).
         await this.loadCurrentUser();
+        
+        // Obtener datos del chat desde URL (con respaldos handoff + Firebase)
+        await this.getChatDataFromURL();
         
         // Cargar mensajes
         await this.loadMessages();
@@ -68,6 +73,17 @@ class ChatClient {
             this.firebase = firebase.initializeApp(CONFIG.FIREBASE.config);
             this.database = firebase.database();
             
+            // Cargar precios globales (settings/pricing) antes de cobrar.
+            // Se suscribe para reflejar cambios del admin en vivo.
+            try {
+                if (window.DeseoPricing && window.DeseoPricing.loadFromFirebase) {
+                    await window.DeseoPricing.loadFromFirebase(this.database);
+                }
+                if (window.DeseoPricing && window.DeseoPricing.subscribe && !this._pricingUnsub) {
+                    this._pricingUnsub = window.DeseoPricing.subscribe(this.database, function () {});
+                }
+            } catch (_) { /* usa defaults */ }
+            
             console.log('✅ Firebase inicializado en chat client');
         } catch (error) {
             console.error('❌ Error inicializando Firebase:', error);
@@ -75,19 +91,114 @@ class ChatClient {
         }
     }
 
-    getChatDataFromURL() {
+    async getChatDataFromURL() {
         const urlParams = new URLSearchParams(window.location.search);
-        this.chatId = urlParams.get('chatId');
-        this.otherUserId = urlParams.get('userId');
-        
+        let chatId = urlParams.get('chatId');
+        let otherUserId = urlParams.get('userId');
+
+        // Normalizar valores "undefined"/"null" que llegan como texto cuando el
+        // origen construyó la URL con variables vacías.
+        const isBad = (v) => !v || v === 'undefined' || v === 'null';
+        if (isBad(chatId)) chatId = null;
+        if (isBad(otherUserId)) otherUserId = null;
+
+        // RESPALDO 1 (robusto en deploy): si el host reescribió la URL y se perdió
+        // el query string, recuperamos los datos del handoff guardado antes de
+        // navegar. Probamos sessionStorage y, si no está, localStorage.
+        if (!chatId || !otherUserId) {
+            const handoff = this.readChatHandoff();
+            if (handoff) {
+                if (!chatId && handoff.chatId) chatId = String(handoff.chatId);
+                if (!otherUserId && handoff.otherUserId) otherUserId = String(handoff.otherUserId);
+                console.warn('⚠️ URL sin parámetros; recuperados del handoff:', { chatId, otherUserId });
+            }
+        }
+
+        this.chatId = chatId;
+        this.otherUserId = otherUserId;
+
+        // RESPALDO 2: reconstruir desde Firebase (fuente de verdad) antes de rendirnos.
+        await this.resolveChatParamsFromFirebase();
+
         if (!this.chatId || !this.otherUserId) {
-            console.error('❌ Faltan parámetros en la URL');
-            this.showError('Parámetros de chat no válidos');
+            console.error('❌ Faltan parámetros en la URL', {
+                chatId: urlParams.get('chatId'),
+                userId: urlParams.get('userId'),
+                search: window.location.search
+            });
+            // Recuperación: si se abrió el chat sin parámetros (p. ej. acceso
+            // directo o enlace roto), volvemos a la lista de chats en lugar de
+            // dejar la pantalla inutilizable.
+            this.showError('Abriendo la lista de chats...');
+            setTimeout(() => {
+                window.location.replace('chats.html');
+            }, 800);
             return;
         }
         
         console.log('📋 Datos del chat:', { chatId: this.chatId, otherUserId: this.otherUserId });
     }
+
+    // Lee el handoff guardado por chats.js antes de navegar (resiste el borrado
+    // del query string por parte del host de deploy).
+    readChatHandoff() {
+        const parse = (raw) => {
+            if (!raw) return null;
+            try { return JSON.parse(raw); } catch (_) { return null; }
+        };
+        try {
+            const s = parse(sessionStorage.getItem('deseo_chat_handoff'));
+            if (s && s.chatId && s.otherUserId) return s;
+        } catch (_) { /* noop */ }
+        try {
+            const l = parse(localStorage.getItem('deseo_chat_handoff'));
+            if (l && l.chatId && l.otherUserId) return l;
+        } catch (_) { /* noop */ }
+        return null;
+    }
+
+    // Reconstruye chatId/otherUserId consultando el chat en Firebase cuando la
+    // URL llegó incompleta. Firebase es la fuente de verdad de los participantes.
+    async resolveChatParamsFromFirebase() {
+        try {
+            if (!this.database || !this.currentUser || !this.currentUser.id) return;
+            const currentId = String(this.currentUser.id);
+
+            // Caso A: tenemos chatId, reconstruimos el otro usuario.
+            if (this.chatId && !this.otherUserId) {
+                const snap = await this.database.ref(`chats/${this.chatId}`).once('value');
+                const chat = snap.val();
+                const otherFromChat = this.pickOtherParticipant(chat, currentId);
+                if (otherFromChat) {
+                    this.otherUserId = otherFromChat;
+                    console.warn('🔁 otherUserId reconstruido desde el chat:', otherFromChat);
+                }
+            }
+
+            // Caso B: tenemos el otro usuario, reconstruimos el chatId determinista.
+            if (!this.chatId && this.otherUserId) {
+                const sortedIds = [currentId, String(this.otherUserId)].sort();
+                this.chatId = `chat_${sortedIds[0]}_${sortedIds[1]}`;
+                console.warn('🔁 chatId reconstruido:', this.chatId);
+            }
+        } catch (e) {
+            console.warn('No se pudieron reconstruir parámetros del chat:', e && e.message);
+        }
+    }
+
+    pickOtherParticipant(chat, currentId) {
+        if (!chat || !chat.participants) return null;
+        const entries = Object.entries(chat.participants);
+        const found = entries.find(([key, p]) => {
+            const pid = p && p.id != null ? String(p.id) : String(key);
+            return pid !== String(currentId);
+        });
+        if (!found) return null;
+        const [key, p] = found;
+        return p && p.id != null ? String(p.id) : String(key);
+    }
+
+
 
     async loadCurrentUser() {
         try {
@@ -199,18 +310,11 @@ class ChatClient {
         const sendBtn = document.getElementById('sendBtn');
         const messageInput = document.getElementById('messageInput');
         
-        
-        if (sendBtn) {
-            sendBtn.addEventListener('click', () => this.sendMessage());
-        }
+        // NOTA: el envío (clic en botón y tecla Enter) se maneja de forma
+        // centralizada y robusta en setupRobustSendDelegation(). No se agregan
+        // listeners directos aquí para evitar disparos duplicados (doble cobro).
         
         if (messageInput) {
-            messageInput.addEventListener('keypress', (e) => {
-                if (e.key === 'Enter') {
-                    this.sendMessage();
-                }
-            });
-            
             messageInput.addEventListener('input', () => this.handleTyping());
         }
 
@@ -275,8 +379,39 @@ class ChatClient {
         // Tema
         this.initializeTheme();
         
+        // DELEGACIÓN ROBUSTA (anti-fallo de binding): garantiza que el botón de
+        // enviar y la tecla Enter funcionen SIEMPRE, aunque el nodo se recree o
+        // el listener directo no llegue a engancharse. Se registra una sola vez.
+        this.setupRobustSendDelegation();
+        
         // Prueba inmediata
         this.testButtonFunctionality();
+    }
+
+    setupRobustSendDelegation() {
+        if (this._sendDelegationReady) return;
+        this._sendDelegationReady = true;
+
+        // Clic: capturamos en fase de captura para no depender del nodo exacto.
+        document.addEventListener('click', (e) => {
+            const target = e.target;
+            if (!target) return;
+            const btn = target.closest ? target.closest('#sendBtn, .send-btn') : null;
+            if (btn) {
+                e.preventDefault();
+                this.sendMessage();
+            }
+        }, true);
+
+        // Enter en el input de mensaje.
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            const t = e.target;
+            if (t && t.id === 'messageInput') {
+                e.preventDefault();
+                this.sendMessage();
+            }
+        }, true);
     }
 
     testButtonFunctionality() {
@@ -445,12 +580,43 @@ class ChatClient {
         
         if (!message || !this.database || !this.chatId) return;
 
+        // ANTI-DOBLE-COBRO: bloqueo de reentrada. Si ya hay un envío en curso,
+        // ignorar el disparo extra (evita que el clic + Enter, o un doble clic
+        // rápido, cobren dos veces el mismo mensaje).
+        if (this._sendingMessage) {
+            console.warn('⚠️ sendMessage reentrante ignorado (envío en curso).');
+            return;
+        }
+        this._sendingMessage = true;
+        // Deshabilitar el botón mientras se procesa (defensa adicional en UI).
+        const _sendBtn = document.getElementById('sendBtn');
+        if (_sendBtn) _sendBtn.disabled = true;
+
+        // Red de seguridad: si por alguna razón el envío se cuelga (red/Firebase),
+        // liberar el bloqueo tras un máximo de 15s para no dejar el chat bloqueado.
+        const _lockGuard = setTimeout(() => { this._sendingMessage = false; }, 15000);
+
         try {
-            const CLIENT_COST = 390;   // lo que paga el cliente por mensaje
-            const PROVIDER_CREDIT = 100; // lo que recibe el proveedor
-            // La diferencia (290) queda como comisión de plataforma y se registra
-            // explícitamente para que sea auditable (antes no tenía destino).
-            const PLATFORM_FEE = CLIENT_COST - PROVIDER_CREDIT;
+            // SEGURIDAD (anti-manipulación): el precio del mensaje NO se toma del
+            // front ni de un valor global. Es el precio que el DUEÑO del perfil
+            // destino definió en users/{otherUserId}/profile/messagePrice y se lee
+            // DIRECTO de Firebase en este momento (fuente de verdad en servidor).
+            // Si el dueño no definió precio, se cae al valor por defecto.
+            let CLIENT_COST = 390; // fallback si el perfil no define precio
+            try {
+                const priceSnap = await this.database
+                    .ref(`users/${this.otherUserId}/profile/messagePrice`)
+                    .once('value');
+                const remotePrice = priceSnap.val();
+                if (typeof remotePrice === 'number' && remotePrice >= 0) {
+                    CLIENT_COST = remotePrice;
+                }
+            } catch (priceErr) {
+                console.warn('⚠️ No se pudo leer el precio del destinatario; usando por defecto:', priceErr);
+            }
+            // El 100% del precio va al dueño del perfil. La comisión de plataforma
+            // (50%) se aplica más adelante, en el retiro (no aquí).
+            const PROVIDER_CREDIT = CLIENT_COST;
 
             // 1) Crear/persistir el mensaje con una push key única (evita colisiones Date.now).
             const tempRef = this.database.ref(`chats/${this.chatId}/messages`).push();
@@ -462,28 +628,27 @@ class ChatClient {
                 senderName: this.currentUserAlias || this.currentUser.name,
                 message: message,
                 timestamp: new Date().toISOString(),
-                type: 'text'
+                type: 'text',
+                price: CLIENT_COST
             };
 
-            // 2) Cobrar al cliente de forma atómica e idempotente (solo tras crear el id).
+            // 2) Persistir el mensaje PRIMERO (sin cobrar aún). Así, si el cobro
+            //    falla, se elimina el mensaje y no queda dinero cobrado sin entrega.
+            await tempRef.set(messageData);
+
+            // 3) Cobrar al cliente de forma atómica e idempotente (opId derivado del id).
             const canCharge = await this.chargeClient(CLIENT_COST, 'message', opId + '_out');
             if (!canCharge) {
+                // Compensación: revertir el mensaje persistido para no dejar un
+                // mensaje "fantasma" que el proveedor vería gratis.
+                try { await tempRef.remove(); } catch (_) {}
                 this.showError('Saldo insuficiente para enviar mensaje.');
                 return;
             }
 
-            // 3) Acreditar al proveedor y registrar comisión de plataforma.
+            // 4) Acreditar al dueño del perfil (el 100% del precio por ahora; la
+            //    comisión de plataforma se descuenta en el retiro).
             await this.creditProvider(PROVIDER_CREDIT, 'message', opId + '_in');
-            try {
-                await this.database.ref(`platform_fees/${opId}`).set({
-                    id: opId, chatId: this.chatId, from: this.currentUser.id,
-                    amount: PLATFORM_FEE, currency: 'COP',
-                    source: 'chat_message', timestamp: new Date().toISOString()
-                });
-            } catch (_) { /* la comisión es informativa; no bloquea el envío */ }
-
-            // 4) Persistir el mensaje ya cobrado.
-            await tempRef.set(messageData);
 
             // Limpiar input
             messageInput.value = '';
@@ -497,6 +662,11 @@ class ChatClient {
         } catch (error) {
             console.error('❌ Error enviando mensaje:', error);
             this.showError('Error enviando mensaje');
+        } finally {
+            // Liberar el bloqueo SIEMPRE (éxito o error).
+            clearTimeout(_lockGuard);
+            this._sendingMessage = false;
+            if (_sendBtn) _sendBtn.disabled = false;
         }
     }
 
@@ -716,24 +886,27 @@ class ChatClient {
         }
         
         try {
-            // Cobrar 100 pesos por solicitar encuentro
-            const charged = await this.chargeClient(100, 'Solicitud de encuentro');
-            if (!charged) return;
-            
-            // Creditar al proveedor
-            await this.creditProvider(100, 'Solicitud de encuentro recibida');
-            
+            const P = (window.DeseoPricing && window.DeseoPricing.get) ? window.DeseoPricing : null;
+            const COST = P ? P.get('encounterRequestCost', 100) : 100;
+            const CREDIT = P ? P.get('encounterRequestCredit', 100) : 100;
+
             const requestMessage = `🤝 **SOLICITUD DE ENCUENTRO**\n\n` +
                 `Título: ${title}\n` +
                 `Descripción: ${description}\n` +
                 (budget ? `Presupuesto: $${budget}\n` : '') +
                 (when ? `Cuándo: ${when}\n` : '') +
                 `\nEl cliente quiere organizar un encuentro contigo.`;
-            
-            await this.sendSpecialMessage(requestMessage, 'service_request');
+
+            // Un único punto de cobro: sendSpecialMessage cobra con precios
+            // configurables. Se evita el doble cargo que había antes
+            // (sendRequestService cobraba y luego sendSpecialMessage volvía a
+            // cobrar por 'service_request').
+            const ok = await this.sendSpecialMessage(requestMessage, 'service_request');
+            if (ok === false) return;
+
             this.closeModalSafe('requestServiceModal');
             this.showNotification('Solicitud de encuentro enviada', 'success');
-            
+
         } catch (error) {
             console.error('❌ Error enviando solicitud:', error);
             this.showError('Error enviando solicitud');
@@ -797,21 +970,27 @@ class ChatClient {
 
     async creditProvider(amount, reason, opId) {
         try {
-            if (!this.otherUserId) return;
+            if (!this.otherUserId) return false;
             const amt = parseInt(amount, 10);
-            if (!Number.isFinite(amt) || amt <= 0) return;
+            if (!Number.isFinite(amt) || amt <= 0) return true; // nada que acreditar = no es error
             if (!window.DeseoMoney) {
                 console.error('❌ DeseoMoney no disponible; abortando crédito por seguridad.');
-                return;
+                return false;
             }
-            await window.DeseoMoney.credit(this.database, this.otherUserId, amt, {
+            const res = await window.DeseoMoney.credit(this.database, this.otherUserId, amt, {
                 reason: reason,
                 from: this.currentUser.id,
                 chatId: this.chatId,
                 opId: opId
             });
+            if (res && res.ok === false) {
+                console.warn('⚠️ Crédito no aplicado:', res.reason);
+                return false;
+            }
+            return true;
         } catch (e) {
             console.error('❌ Error acreditando al proveedor:', e);
+            return false;
         }
     }
 
@@ -837,33 +1016,55 @@ class ChatClient {
             this.showError('Por favor ingresa un monto válido');
             return;
         }
+
+        // ANTI-DOBLE-COBRO: bloqueo de reentrada (evita doble propina por doble clic).
+        if (this._sendingTip) {
+            console.warn('⚠️ sendTip reentrante ignorado (envío en curso).');
+            return;
+        }
+        this._sendingTip = true;
         
         try {
-            // Operación única e idempotente: la propina es una transferencia.
+            const P = (window.DeseoPricing && window.DeseoPricing.get) ? window.DeseoPricing : null;
+            // Propina: el cliente elige el monto; el crédito al proveedor puede
+            // ser configurable (por defecto igual al monto). OpId único por operación.
+            const providerCredit = P ? P.get('tipProviderCredit', amount) : amount;
             const opId = `tip_${this.chatId}_${Date.now()}_${Math.random().toString(36).slice(2,9)}`;
-            // Cobrar al cliente (atómico)
-            const charged = await this.chargeClient(amount, 'Propina', opId + '_out');
-            if (!charged) {
-                this.showError('Saldo insuficiente para enviar propina');
-                return;
-            }
-            
-            // Acreditar al proveedor (atómico, mismo opId)
-            await this.creditProvider(amount, 'Propina recibida', opId + '_in');
-            
-            // Enviar mensaje de propina
+
+            // 1) Persistir el mensaje de propina PRIMERO (sin cobrar aún).
+            const messageId = this.database.ref(`chats/${this.chatId}/messages`).push().key;
             const tipMessage = `💰 **PROPINA ENVIADA**\n\n` +
                 `Monto: $${amount.toLocaleString('es-CO')}\n` +
                 (note ? `Nota: ${note}` : 'Gracias por tu excelente servicio!');
-            
-            await this.sendSpecialMessage(tipMessage, 'tip');
-            
+            const msgRef = this.database.ref(`chats/${this.chatId}/messages/${messageId}`);
+            await msgRef.set({
+                id: messageId,
+                senderId: this.currentUser.id,
+                senderName: this.currentUserAlias || this.currentUser.name,
+                message: tipMessage,
+                timestamp: new Date().toISOString(),
+                type: 'tip'
+            });
+
+            // 2) Cobrar al cliente (atómico, idempotente).
+            const charged = await this.chargeClient(amount, 'Propina', opId + '_out');
+            if (!charged) {
+                try { await msgRef.remove(); } catch (_) {}
+                this.showError('Saldo insuficiente para enviar propina');
+                return;
+            }
+
+            // 3) Acreditar al proveedor (atómico, mismo opId).
+            await this.creditProvider(providerCredit, 'Propina recibida', opId + '_in');
+
             this.closeModalSafe('tipModal');
             this.showNotification(`Propina de $${amount.toLocaleString('es-CO')} enviada`, 'success');
-            
+
         } catch (error) {
             console.error('❌ Error enviando propina:', error);
             this.showError('Error enviando propina');
+        } finally {
+            this._sendingTip = false;
         }
     }
 
@@ -1134,31 +1335,69 @@ class ChatClient {
     async unlockPaidPhotos(messageId, price) {
         try {
             if (!this.database || !this.chatId) return;
-            
-            // Verificar saldo suficiente
-            const canCharge = await this.chargeClient(price, 'paid_photos');
-            if (!canCharge) {
-                this.showError('Saldo insuficiente para desbloquear fotos.');
-                return;
-            }
-            
-            // Acreditar al proveedor
-            await this.creditProvider(price, 'paid_photos');
-            
-            // Obtener el mensaje original para mostrar las fotos
+
+            // 1) Leer el mensaje ANTES de cobrar: validar que exista, que tenga
+            //    imágenes, que no esté ya desbloqueado y que el precio coincida.
             const messageRef = this.database.ref(`chats/${this.chatId}/messages/${messageId}`);
             const snapshot = await messageRef.once('value');
             const message = snapshot.val();
-            
-            if (message && message.images) {
-                // Marcar como desbloqueado
-                await messageRef.update({ unlocked: true, unlockedAt: new Date().toISOString() });
-                
-                // Recargar mensajes para mostrar las fotos desbloqueadas
-                await this.loadMessages();
-                
-                this.showNotification('Fotos desbloqueadas correctamente', 'success');
+            if (!message || !message.images || !message.images.length) {
+                this.showError('Este mensaje no tiene fotos para desbloquear.');
+                return;
             }
+            if (message.unlocked) {
+                this.showNotification('Estas fotos ya están desbloqueadas.', 'info');
+                await this.loadMessages();
+                return;
+            }
+
+            // Precio autoritativo del mensaje (no confiar en el pasado por URL/onclick).
+            const authoritativePrice = (typeof message.price === 'number' && message.price > 0)
+                ? message.price : parseInt(price, 10);
+            if (!Number.isFinite(authoritativePrice) || authoritativePrice <= 0) {
+                this.showError('Precio inválido para desbloquear.');
+                return;
+            }
+
+            // opId determinista → idempotencia real (no doble cobro con doble clic).
+            const opId = `photos_${this.chatId}_${messageId}`;
+
+            // 2) Reservar el desbloqueo de forma atómica ANTES de mover dinero.
+            //    Si otra pestaña ya lo reclamó, abortamos sin cobrar.
+            let claimed = false;
+            try {
+                const claimRes = await messageRef.transaction(function (cur) {
+                    if (!cur) return cur;
+                    if (cur.unlocked) return; // aborta (ya desbloqueado)
+                    cur.unlocked = true;
+                    cur.unlockedAt = new Date().toISOString();
+                    cur.unlockedBy = 'pending';
+                    return cur;
+                });
+                claimed = !!(claimRes && claimRes.committed);
+            } catch (_) { claimed = false; }
+            if (!claimed) {
+                this.showNotification('Estas fotos ya están desbloqueadas.', 'info');
+                await this.loadMessages();
+                return;
+            }
+
+            // 3) Cobrar al cliente (opId fijo → reintentos no duplican).
+            const canCharge = await this.chargeClient(authoritativePrice, 'paid_photos', opId + '_out');
+            if (!canCharge) {
+                // Revertir el claim para que pueda reintentar con saldo.
+                try { await messageRef.update({ unlocked: false, unlockedAt: null, unlockedBy: null }); } catch (_) {}
+                this.showError('Saldo insuficiente para desbloquear fotos.');
+                return;
+            }
+
+            // 4) Acreditar al proveedor.
+            await this.creditProvider(authoritativePrice, 'paid_photos', opId + '_in');
+
+            // 5) Confirmar el desbloqueo (ya quedó marcado en el claim).
+            try { await messageRef.update({ unlockedBy: this.currentUser.id }); } catch (_) {}
+            await this.loadMessages();
+            this.showNotification('Fotos desbloqueadas correctamente', 'success');
         } catch (error) {
             console.error('❌ Error desbloqueando fotos:', error);
             this.showError('Error desbloqueando fotos');
@@ -1196,6 +1435,14 @@ class ChatClient {
     async respondToEncounterOffer(messageId, accepted) {
         try {
             if (!this.database || !this.chatId) return;
+
+            // ANTI-DOBLE-COBRO: bloqueo de reentrada. Aceptar la misma oferta dos
+            // veces crearía dos órdenes y cobraría dos escrows. Evitarlo.
+            if (this._respondingOffer) {
+                console.warn('⚠️ respondToEncounterOffer reentrante ignorado.');
+                return;
+            }
+            this._respondingOffer = true;
             
             if (accepted) {
                 // Obtener detalles de la oferta
@@ -1208,15 +1455,8 @@ class ChatClient {
                     const orderId = `order_${Date.now()}_${Math.random().toString(36).slice(2,9)}`;
                     const escrowOpId = `escrow_${this.chatId}_${orderId}`;
 
-                    // Cobrar al cliente y crear ORDEN EN ESCROW (sin acreditar al proveedor aún).
-                    // La operación es atómica e idempotente (no se puede cobrar dos veces el mismo escrow).
-                    const canCharge = await this.chargeClient(offer.price, 'encounter_escrow', escrowOpId);
-                    if (!canCharge) {
-                        this.showError('Saldo insuficiente para aceptar la oferta.');
-                        return;
-                    }
-
-                    // Crear orden de encuentro en escrow
+                    // 1) RESERVAR la orden en estado 'pending_escrow' ANTES de cobrar.
+                    //    Si el cobro falla, se elimina la orden (no queda dinero sin orden).
                     const orderData = {
                         id: orderId,
                         chatId: this.chatId,
@@ -1228,13 +1468,30 @@ class ChatClient {
                         time: offer.time || '',
                         escrowAmount: offer.price || 0,
                         escrowOpId: escrowOpId,
-                        status: 'escrowed', // escrowed | completed | disputed | cancelled
+                        status: 'pending_escrow', // pending_escrow | escrowed | completed | disputed | cancelled
                         clientConfirmed: false,
                         providerConfirmed: false,
                         createdAt: new Date().toISOString(),
                         updatedAt: new Date().toISOString()
                     };
-                    await this.database.ref(`encounterOrders/${orderId}`).set(orderData);
+                    const orderRef = this.database.ref(`encounterOrders/${orderId}`);
+                    await orderRef.set(orderData);
+
+                    // 2) Cobrar al cliente (escrow atómico e idempotente).
+                    const canCharge = await this.chargeClient(offer.price, 'encounter_escrow', escrowOpId);
+                    if (!canCharge) {
+                        // Compensación: eliminar la orden reservada.
+                        try { await orderRef.remove(); } catch (_) {}
+                        this.showError('Saldo insuficiente para aceptar la oferta.');
+                        return;
+                    }
+
+                    // 3) Marcar la orden como 'escrowed' y vincularla al chat.
+                    await orderRef.update({
+                        status: 'escrowed',
+                        escrowedAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString()
+                    });
                     await this.database.ref(`chats/${this.chatId}/orders/${orderId}`).set(true);
                 }
             }
@@ -1263,6 +1520,8 @@ class ChatClient {
         } catch (error) {
             console.error('❌ Error respondiendo a oferta:', error);
             this.showError('Error procesando respuesta');
+        } finally {
+            this._respondingOffer = false;
         }
     }
 
@@ -1358,25 +1617,52 @@ class ChatClient {
 
     async checkOrderCompletion(orderId) {
         const ref = this.database.ref(`encounterOrders/${orderId}`);
-        const snap = await ref.once('value');
-        const order = snap.val();
-        if (!order) return;
-        if (order.clientConfirmed && order.providerConfirmed && order.status === 'escrowed') {
-            await ref.update({ status: 'completed', updatedAt: new Date().toISOString() });
-            await this.releaseEscrow(order);
-            await this.sendCompletionMessage(order);
-            await this.promptOptionalRatings(order);
-            this.showNotification('Encuentro finalizado. Fondos liberados al proveedor.', 'success');
-            const btn = document.getElementById('completeEncounterBtn');
-            if (btn) btn.remove();
+        // Reclamo ATÓMICO del paso escrowed→completed: solo UNA pestaña/lado
+        // gana, evitando doble liberación de escrow.
+        let claimed = false;
+        let order = null;
+        try {
+            const res = await ref.transaction(function (cur) {
+                if (!cur) return cur;
+                if (cur.status !== 'escrowed') return; // aborta (ya no está en escrow)
+                if (!(cur.clientConfirmed && cur.providerConfirmed)) return; // faltan confirmaciones
+                cur.status = 'completed';
+                cur.completedAt = new Date().toISOString();
+                cur.updatedAt = new Date().toISOString();
+                return cur;
+            });
+            claimed = !!(res && res.committed);
+            order = (res && res.snapshot) ? res.snapshot.val() : null;
+        } catch (e) {
+            console.error('❌ Error reclamando finalización de orden:', e);
         }
+        if (!claimed || !order) return;
+
+        await this.releaseEscrow(order);
+        await this.sendCompletionMessage(order);
+        await this.promptOptionalRatings(order);
+        this.showNotification('Encuentro finalizado. Fondos liberados al proveedor.', 'success');
+        const btn = document.getElementById('completeEncounterBtn');
+        if (btn) btn.remove();
     }
 
     async releaseEscrow(order) {
         // Acreditar al proveedor el monto en garantía, de forma atómica e idempotente
         // (opId basado en el escrow: evita doble liberación si se reintenta).
         const opId = `release_${order.escrowOpId || order.id}`;
-        await this.creditProvider(order.escrowAmount, 'encounter_release', opId);
+        const ok = await this.creditProvider(order.escrowAmount, 'encounter_release', opId);
+        if (!ok) {
+            // El escrow ya quedó 'completed' atómicamente; si el crédito falla,
+            // se marca para revisión admin en vez de perder el rastro.
+            console.error('❌ Falló la liberación del escrow de la orden', order.id);
+            try {
+                await this.database.ref(`encounterOrders/${order.id}`).update({
+                    releaseFailed: true,
+                    releaseFailedAt: new Date().toISOString()
+                });
+            } catch (_) {}
+        }
+        return ok;
     }
 
     async sendCompletionMessage(order) {
@@ -1463,10 +1749,29 @@ class ChatClient {
 
     async raiseDispute(orderId, reason) {
         const ref = this.database.ref(`encounterOrders/${orderId}`);
-        const snap = await ref.once('value');
-        const order = snap.val();
-        if (!order) return;
-        const disputeId = `dispute_${Date.now()}`;
+        // Transición atómica escrowed→disputed: evita disputar una orden ya
+        // completada/liberada (liberar sobre dinero en disputa).
+        const disputeId = `dispute_${orderId}`;
+        let order = null;
+        let claimed = false;
+        try {
+            const res = await ref.transaction(function (cur) {
+                if (!cur) return cur;
+                if (cur.status !== 'escrowed') return; // solo desde escrow
+                cur.status = 'disputed';
+                cur.disputeId = disputeId;
+                cur.updatedAt = new Date().toISOString();
+                return cur;
+            });
+            claimed = !!(res && res.committed);
+            order = (res && res.snapshot) ? res.snapshot.val() : null;
+        } catch (e) {
+            console.error('❌ Error abriendo disputa:', e);
+        }
+        if (!claimed || !order) {
+            this.showNotification('No se puede abrir disputa: la orden ya no está en garantía.', 'info');
+            return;
+        }
         const dispute = {
             id: disputeId,
             orderId: order.id,
@@ -1476,13 +1781,12 @@ class ChatClient {
             amount: order.escrowAmount,
             reason,
             createdBy: this.currentUser.id,
-            status: 'open', // open | resolved | rejected
+            status: 'open', // open | resolving | resolved | rejected
             createdAt: new Date().toISOString()
         };
         await this.database.ref(`disputes/${disputeId}`).set(dispute);
-        await ref.update({ status: 'disputed', updatedAt: new Date().toISOString(), disputeId });
-        await this.database.ref(`chats/${order.chatId}/messages/dispute_${Date.now()}`).set({
-            id: `dispute_${Date.now()}`,
+        await this.database.ref(`chats/${order.chatId}/messages/system_${disputeId}`).set({
+            id: `system_${disputeId}`,
             type: 'system',
             message: '⚠️ Se abrió una disputa para esta orden. Un administrador revisará el caso.',
             timestamp: new Date().toISOString()
@@ -1685,41 +1989,76 @@ class ChatClient {
         }
     }
 
-    async sendSpecialMessage(message, type) {
+    async sendSpecialMessage(message, type, options) {
         if (!this.database || !this.chatId) return;
+        options = options || {};
 
-        // Solo cobrar para mensajes que requieren pago (urgent, service_request)
-        const paidMessageTypes = ['urgent', 'service_request'];
-        const payOpId = `special_${this.chatId}_${Date.now()}_${Math.random().toString(36).slice(2,9)}`;
-        if (paidMessageTypes.includes(type)) {
-            const canCharge = await this.chargeClient(390, type || 'message', payOpId + '_out');
-            if (!canCharge) {
-                this.showError('Saldo insuficiente para enviar mensaje.');
-                return;
-            }
-            // Acreditar al proveedor (mismo opId)
-            await this.creditProvider(100, type || 'message', payOpId + '_in');
-            // Registrar comisión de plataforma (390 - 100 = 290) para auditoría.
-            try {
-                await this.database.ref(`platform_fees/${payOpId}`).set({
-                    id: payOpId, chatId: this.chatId, from: this.currentUser.id,
-                    amount: 290, currency: 'COP', source: 'chat_' + (type || 'message'),
-                    timestamp: new Date().toISOString()
-                });
-            } catch (_) { /* informativo */ }
+        // ANTI-DOBLE-COBRO: bloqueo de reentrada para mensajes especiales
+        // (urgente / solicitud). Evita doble cobro por doble disparo rápido.
+        if (this._sendingSpecial) {
+            console.warn('⚠️ sendSpecialMessage reentrante ignorado (envío en curso).');
+            return false;
         }
+        this._sendingSpecial = true;
+        try {
+        // Tipos que requieren pago. El cobro se hace AQUÍ (único punto),
+        // salvo que el llamador ya haya pagado (options.alreadyPaid) para evitar
+        // doble cobro (p.ej. sendRequestService o sendTip ya cobraron).
+        const paidMessageTypes = ['urgent', 'service_request'];
+        const requiresPayment = paidMessageTypes.includes(type) && !options.alreadyPaid;
+
+        // SEGURIDAD (anti-manipulación): igual que el mensaje normal, el precio
+        // se toma del DUEÑO del perfil destino en users/{otherUserId}/profile/messagePrice,
+        // leído DIRECTO de Firebase (fuente de verdad en servidor).
+        let CLIENT_COST = 390;
+        try {
+            const priceSnap = await this.database
+                .ref(`users/${this.otherUserId}/profile/messagePrice`)
+                .once('value');
+            const remotePrice = priceSnap.val();
+            if (typeof remotePrice === 'number' && remotePrice >= 0) CLIENT_COST = remotePrice;
+        } catch (priceErr) {
+            console.warn('⚠️ No se pudo leer el precio del destinatario; usando por defecto:', priceErr);
+        }
+        // El 100% del precio va al dueño del perfil. La comisión (50%) se aplica
+        // más adelante, en el retiro (no aquí).
+        const PROVIDER_CREDIT = CLIENT_COST;
+        const PLATFORM_FEE = 0;
+
+        // Id de mensaje y opId deterministas (idempotencia real por mensaje).
+        const messageId = this.database.ref(`chats/${this.chatId}/messages`).push().key;
+        const payOpId = options.opId || `special_${this.chatId}_${messageId}`;
 
         const messageData = {
-            id: this.database.ref(`chats/${this.chatId}/messages`).push().key,
+            id: messageId,
             senderId: this.currentUser.id,
             senderName: this.currentUserAlias || this.currentUser.name,
             message: message,
             timestamp: new Date().toISOString(),
-            type: type
+            type: type,
+            price: requiresPayment ? CLIENT_COST : 0
         };
 
-        const messagesRef = this.database.ref(`chats/${this.chatId}/messages/${messageData.id}`);
+        // 1) Persistir PRIMERO (sin cobrar aún).
+        const messagesRef = this.database.ref(`chats/${this.chatId}/messages/${messageId}`);
         await messagesRef.set(messageData);
+
+        // 2) Cobrar si aplica. Si falla, eliminar el mensaje (compensación).
+        if (requiresPayment) {
+            const canCharge = await this.chargeClient(CLIENT_COST, type || 'message', payOpId + '_out');
+            if (!canCharge) {
+                try { await messagesRef.remove(); } catch (_) {}
+                this.showError('Saldo insuficiente para enviar mensaje.');
+                return false;
+            }
+            await this.creditProvider(PROVIDER_CREDIT, type || 'message', payOpId + '_in');
+            // (La comisión de plataforma se aplicará en el retiro; no aquí.)
+        }
+        return true;
+        } finally {
+            // Liberar el bloqueo SIEMPRE (éxito o error).
+            this._sendingSpecial = false;
+        }
     }
 
     async updateServiceData(updates) {

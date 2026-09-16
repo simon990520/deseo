@@ -553,6 +553,11 @@ class AdminDashboard {
     }
 
     renderTransactionItem(transactionId, userId, transaction) {
+        // Helpers de escape (evitan XSS con datos controlados por el usuario).
+        const esc = (typeof escapeHtml === 'function') ? escapeHtml : (v) => String(v == null ? '' : v);
+        const escAttr = (typeof escapeAttr === 'function') ? escapeAttr : esc;
+        const safe = (typeof safeUrl === 'function') ? safeUrl : (u) => u;
+
         // Determinar el estado
         let statusBadge = '';
         let statusColor = '';
@@ -575,6 +580,17 @@ class AdminDashboard {
         const transactionIcon = transaction.type === 'income' ? 'fas fa-arrow-up' : 'fas fa-arrow-down';
         const transactionColor = transaction.type === 'income' ? 'var(--primary-color)' : '#f44336';
 
+        // Monto seguro (entero) y fecha segura.
+        const amountInt = (typeof escapeInt === 'function') ? escapeInt(transaction.amount, 0) : (parseInt(transaction.amount, 10) || 0);
+        const safeDate = (() => {
+            const d = new Date(transaction.timestamp);
+            return isNaN(d.getTime()) ? 'N/A' : d.toLocaleString('es-ES');
+        })();
+
+        // IDs usados en atributos onclick: se escapan para evitar romper el HTML.
+        const txIdAttr = escAttr(transactionId);
+        const userIdAttr = escAttr(userId);
+
         return `
             <div class="transaction-item">
                 <div class="transaction-info">
@@ -588,30 +604,30 @@ class AdminDashboard {
                                 <i class="${statusIcon}"></i> ${statusBadge}
                             </span>` : ''}
                         </h4>
-                        <p><strong>Usuario:</strong> ${userId}</p>
-                        <p><strong>Monto:</strong> $${transaction.amount.toLocaleString('es-CO')} COP</p>
-                        <p><strong>Método:</strong> ${transaction.method || 'N/A'}</p>
-                        <p><strong>Fecha:</strong> ${new Date(transaction.timestamp).toLocaleString('es-ES')}</p>
-                        ${transaction.proofFileName ? `<p><strong>Comprobante:</strong> ${transaction.proofFileName}</p>` : ''}
+                        <p><strong>Usuario:</strong> ${esc(userId)}</p>
+                        <p><strong>Monto:</strong> $${amountInt.toLocaleString('es-CO')} COP</p>
+                        <p><strong>Método:</strong> ${esc(transaction.method || 'N/A')}</p>
+                        <p><strong>Fecha:</strong> ${esc(safeDate)}</p>
+                        ${transaction.proofFileName ? `<p><strong>Comprobante:</strong> ${esc(transaction.proofFileName)}</p>` : ''}
                         ${transaction.adminMessage ? `
                             <div class="admin-message">
                                 <h4><i class="fas fa-comment"></i> Mensaje del Administrador:</h4>
-                                <p>${transaction.adminMessage}</p>
+                                <p>${esc(transaction.adminMessage)}</p>
                             </div>
                         ` : ''}
                     </div>
                 </div>
                 <div class="transaction-actions">
                     ${transaction.proofImage ? `
-                        <button class="btn-admin btn-view" onclick="adminApp.showProof('${transaction.proofImage}')">
+                        <button class="btn-admin btn-view" onclick="adminApp.showProof('${txIdAttr}', '${userIdAttr}')">
                             <i class="fas fa-eye"></i> Ver Comprobante
                         </button>
                     ` : ''}
                     ${transaction.status === 'pending_verification' ? `
-                        <button class="btn-admin btn-approve" onclick="adminApp.showMessageModal('${transactionId}', '${userId}', ${transaction.amount}, 'approve')">
+                        <button class="btn-admin btn-approve" onclick="adminApp.showMessageModal('${txIdAttr}', '${userIdAttr}', ${amountInt}, 'approve')">
                             <i class="fas fa-check"></i> Aprobar
                         </button>
-                        <button class="btn-admin btn-reject" onclick="adminApp.showMessageModal('${transactionId}', '${userId}', ${transaction.amount}, 'reject')">
+                        <button class="btn-admin btn-reject" onclick="adminApp.showMessageModal('${txIdAttr}', '${userIdAttr}', ${amountInt}, 'reject')">
                             <i class="fas fa-times"></i> Rechazar
                         </button>
                     ` : ''}
@@ -620,14 +636,27 @@ class AdminDashboard {
         `;
     }
 
-    showProof(proofImage) {
+    showProof(transactionId, userId) {
         const modal = document.getElementById('proofModal');
         const container = document.getElementById('proofImageContainer');
-        
+
+        // Buscar la transacción real en memoria (no confiar en el HTML).
+        const entry = this.allTransactions.find(t => t.id === transactionId && t.userId === userId);
+        const rawProof = entry && entry.transaction ? entry.transaction.proofImage : null;
+
+        // Validar esquema de la URL (bloquea javascript:, data:text/html, etc.).
+        const safeProof = (typeof safeUrl === 'function') ? safeUrl(rawProof) : rawProof;
+
         if (modal && container) {
-            container.innerHTML = `
-                <img src="${proofImage}" style="max-width: 100%; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.3);" />
-            `;
+            if (!safeProof) {
+                container.innerHTML = '<p style="color:#f44336;">Comprobante no disponible o inválido.</p>';
+            } else {
+                const img = document.createElement('img');
+                img.src = safeProof;
+                img.style.cssText = 'max-width: 100%; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.3);';
+                container.innerHTML = '';
+                container.appendChild(img);
+            }
             modal.style.display = 'flex';
         }
     }
@@ -718,10 +747,16 @@ class AdminDashboard {
             }
 
             const transactionType = transactionData.type || 'income';
-            const amt = parseInt(amount, 10);
+            // SEGURIDAD: usar SIEMPRE el monto almacenado en Firebase, no el que
+            // llega desde el DOM (evita manipulación del HTML/atributos onclick).
+            const amt = parseInt(transactionData.amount, 10);
             if (!Number.isFinite(amt) || amt <= 0) {
                 alert('❌ Monto inválido.');
                 return;
+            }
+            // Advertir si el monto del DOM no coincide con el real (posible manipulación).
+            if (parseInt(amount, 10) !== amt) {
+                console.warn('⚠️ El monto del DOM no coincide con el de Firebase; se usa el de Firebase.');
             }
 
             // Actualizar estado de la transacción y agregar mensaje
@@ -1069,9 +1104,17 @@ class AdminDashboard {
     }
 
     renderUserItem(user) {
+        // Helpers de escape (evitan XSS con datos controlados por el usuario).
+        const esc = (typeof escapeHtml === 'function') ? escapeHtml : (v) => String(v == null ? '' : v);
+        const escAttr = (typeof escapeAttr === 'function') ? escapeAttr : esc;
+
         const statusBadge = user.status === 'active' ? 
             '<span style="background: #4CAF50; color: white; padding: 2px 8px; border-radius: 12px; font-size: 10px;">Activo</span>' :
             '<span style="background: #f44336; color: white; padding: 2px 8px; border-radius: 12px; font-size: 10px;">Inactivo</span>';
+
+        const balanceInt = (typeof escapeInt === 'function') ? escapeInt(user.balance, 0) : (parseInt(user.balance, 10) || 0);
+        const safeDate = user.lastUpdated ? new Date(user.lastUpdated).toLocaleString('es-ES') : 'N/A';
+        const userIdAttr = escAttr(user.id);
 
         return `
             <div class="user-item">
@@ -1080,24 +1123,24 @@ class AdminDashboard {
                         <i class="fas fa-user"></i>
                     </div>
                     <div class="user-details">
-                        <h4>${user.email || user.id} ${statusBadge}</h4>
-                        <p><strong>ID:</strong> ${user.id}</p>
-                        <p><strong>Balance:</strong> $${(user.balance || 0).toLocaleString('es-CO')} COP</p>
-                        <p><strong>Última actividad:</strong> ${user.lastUpdated ? new Date(user.lastUpdated).toLocaleString('es-ES') : 'N/A'}</p>
+                        <h4>${esc(user.email || user.id)} ${statusBadge}</h4>
+                        <p><strong>ID:</strong> ${esc(user.id)}</p>
+                        <p><strong>Balance:</strong> $${balanceInt.toLocaleString('es-CO')} COP</p>
+                        <p><strong>Última actividad:</strong> ${esc(safeDate)}</p>
                     </div>
                 </div>
                 <div class="user-actions">
-                    <button class="btn-admin btn-view" onclick="adminApp.viewUserDetails('${user.id}')">
+                    <button class="btn-admin btn-view" onclick="adminApp.viewUserDetails('${userIdAttr}')">
                         <i class="fas fa-eye"></i> Ver
                     </button>
-                    <button class="btn-admin btn-message" onclick="adminApp.messageUser('${user.id}')">
+                    <button class="btn-admin btn-message" onclick="adminApp.messageUser('${userIdAttr}')">
                         <i class="fas fa-comment"></i> Mensaje
                     </button>
                     ${user.status === 'active' ? 
-                        `<button class="btn-admin btn-reject" onclick="adminApp.banUser('${user.id}')">
+                        `<button class="btn-admin btn-reject" onclick="adminApp.banUser('${userIdAttr}')">
                             <i class="fas fa-ban"></i> Suspender
                         </button>` :
-                        `<button class="btn-admin btn-approve" onclick="adminApp.unbanUser('${user.id}')">
+                        `<button class="btn-admin btn-approve" onclick="adminApp.unbanUser('${userIdAttr}')">
                             <i class="fas fa-check"></i> Activar
                         </button>`
                     }

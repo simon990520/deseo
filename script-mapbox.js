@@ -892,10 +892,22 @@ class DeseoApp {
             console.warn('⚠️ filterBtn not found');
         }
 
-        const themeToggle = document.getElementById('themeToggle');
-        if (themeToggle) {
-            themeToggle.addEventListener('click', () => this.toggleTheme());
-        } else {
+        // NOTA: El botón #themeToggle es gestionado por theme-manager.js
+        // (fuente única de verdad). Aquí NO añadimos otro listener de click
+        // porque provocaba un DOBLE toggle (theme-manager + este script),
+        // dejando el tema sin cambios visibles. En su lugar escuchamos el
+        // evento 'themeChanged' que dispara el ThemeManager para actualizar
+        // el estilo del mapa y mostrar la notificación.
+        if (!this._themeChangeBound) {
+            this._themeChangeBound = true;
+            window.addEventListener('themeChanged', (e) => {
+                const theme = e && e.detail ? e.detail.theme : null;
+                if (!theme) return;
+                this.updateMapStyle(theme);
+                this.showNotification(`Tema cambiado a ${theme === 'light' ? 'claro' : 'oscuro'}`, 'success');
+            });
+        }
+        if (!document.getElementById('themeToggle')) {
             console.warn('⚠️ themeToggle not found');
         }
 
@@ -3283,6 +3295,15 @@ class DeseoApp {
 
             // Crear o obtener ID del chat
             const chatId = await this.createOrGetChat(userId);
+
+            // Validar que tengamos ambos parámetros antes de redirigir; si no,
+            // evitamos abrir una URL con "undefined" (que provoca el error
+            // "Faltan parámetros en la URL" en chat-client.html).
+            if (!chatId || !userId) {
+                console.error('❌ No se puede abrir el chat: faltan datos', { chatId, userId });
+                this.showNotification('No se pudo abrir el chat (datos incompletos)', 'error');
+                return;
+            }
             
             // LÓGICA CORREGIDA:
             // El usuario actual (que presiona "Contactar") es el CLIENTE
@@ -3290,7 +3311,8 @@ class DeseoApp {
             // Por lo tanto, el usuario actual va a chat-client.html
             // Y el usuario contactado debe ir a chat-provider.html cuando abra el chat
             
-            window.location.href = `chat-client.html?chatId=${chatId}&userId=${userId}`;
+            window.location.href = `chat-client.html?chatId=${encodeURIComponent(chatId)}&userId=${encodeURIComponent(userId)}`;
+
 
         } catch (error) {
             console.error('❌ Error contactando usuario:', error);
@@ -4363,26 +4385,30 @@ class DeseoApp {
     }
 
     // ===== TOGGLE DE TEMA =====
+    // Delegamos en el ThemeManager global (fuente única de verdad) para que
+    // el tema se guarde con la clave canónica 'deseo_theme' y se aplique a
+    // <html> y <body> de forma consistente en toda la app.
     toggleTheme() {
-        const currentTheme = document.documentElement.getAttribute('data-theme');
-        const newTheme = currentTheme === 'light' ? 'dark' : 'light';
-        
-        document.documentElement.setAttribute('data-theme', newTheme);
-        localStorage.setItem('deseo-theme', newTheme);
-        
-        // Actualizar icono del botón
-        const themeIcon = document.querySelector('#themeToggle i');
-        if (newTheme === 'light') {
-            themeIcon.className = 'fas fa-sun';
+        let newTheme;
+        if (window.themeManager) {
+            newTheme = window.themeManager.toggleTheme();
+        } else if (window.DeseoTheme) {
+            newTheme = window.DeseoTheme.toggle();
         } else {
-            themeIcon.className = 'fas fa-moon';
+            const currentTheme = document.documentElement.getAttribute('data-theme') || 'dark';
+            newTheme = currentTheme === 'light' ? 'dark' : 'light';
+            document.documentElement.setAttribute('data-theme', newTheme);
+            document.body.setAttribute('data-theme', newTheme);
+            document.body.classList.toggle('dark-mode', newTheme === 'dark');
+            localStorage.setItem('deseo_theme', newTheme);
         }
-        
+
         // Actualizar estilo del mapa según el tema
         this.updateMapStyle(newTheme);
-        
+
         this.showNotification(`Tema cambiado a ${newTheme === 'light' ? 'claro' : 'oscuro'}`, 'success');
     }
+
 
     // ===== ACTUALIZAR ESTILO DEL MAPA =====
     updateMapStyle(theme) {
@@ -5222,30 +5248,27 @@ class DeseoApp {
     }
 
     // ===== CARGAR TEMA GUARDADO =====
+    // El ThemeManager global ya aplica el tema al cargar. Aquí solo
+    // sincronizamos el estado local para el estilo del mapa.
     loadSavedTheme() {
-        const savedTheme = localStorage.getItem('deseo-theme');
-        const themeToggle = document.querySelector('#themeToggle i'); // Seleccionar el icono dentro del botón
-
-        if (savedTheme) {
-            document.documentElement.setAttribute('data-theme', savedTheme);
-            if (themeToggle) {
-                if (savedTheme === 'light') {
-                    themeToggle.className = 'fas fa-sun';
-                } else {
-                    themeToggle.className = 'fas fa-moon';
-                }
-            }
+        let savedTheme = null;
+        if (window.themeManager) {
+            savedTheme = window.themeManager.getCurrentTheme();
+        } else if (window.DeseoTheme) {
+            savedTheme = window.DeseoTheme.get();
         } else {
-            // Si no hay tema guardado, aplicar el tema por defecto (oscuro) y actualizar el icono
-            document.documentElement.setAttribute('data-theme', 'dark');
-            if (themeToggle) {
-                themeToggle.className = 'fas fa-moon';
-            }
+            savedTheme = localStorage.getItem('deseo_theme') ||
+                          localStorage.getItem('deseo-theme') || 'dark';
         }
-        
+
+        if (savedTheme !== 'light' && savedTheme !== 'dark') {
+            savedTheme = 'dark';
+        }
+
         // Guardar el tema actual para usar después de que el mapa se cargue
-        this.currentTheme = document.documentElement.getAttribute('data-theme');
+        this.currentTheme = savedTheme;
     }
+
 
     // ===== INDICADOR DE TYPING =====
     addTypingIndicator() {

@@ -238,6 +238,56 @@ body {
     overflow: hidden;
 }
 
+/* ===== ÁREA PRINCIPAL (contenido a la derecha del sidebar) =====
+   CRÍTICO: el body y .app-container tienen overflow:hidden, por lo que el
+   scroll debe vivir aquí. Sin esto, el contenido largo (p.ej. Configuración)
+   queda recortado y no se puede desplazar. */
+.main-content {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Header del contenido (título + botón atrás) fijo arriba al hacer scroll */
+.content-header {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 1rem 1.5rem;
+    background: var(--background);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.content-header h1 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.content-header .back-btn {
+    background: none;
+    border: none;
+    color: var(--text-primary);
+    font-size: 1.1rem;
+    cursor: pointer;
+    padding: 0.4rem 0.6rem;
+    border-radius: var(--border-radius-sm);
+    transition: var(--transition);
+}
+
+.content-header .back-btn:hover {
+    background: var(--hover-bg);
+}
+
 /* ===== BOTONES FLOTANTES GLOBALES ===== */
 .filter-floating {
     display: none; /* Oculto por defecto, se muestra solo en móvil */
@@ -1322,6 +1372,15 @@ body {
         flex-direction: column;
     }
 
+    /* En móvil el sidebar es fixed (overlay), así que el contenido principal
+       debe ocupar toda la altura y desplazarse por sí mismo. */
+    .main-content {
+        height: 100vh;
+        width: 100%;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
     /* Mostrar botones en móvil */
     .mobile-filter-btn {
         display: block !important;
@@ -1376,7 +1435,13 @@ body {
 
     /* Mantener solo el header del sidebar visible sobre el mapa */
     .sidebar {
-        position: fixed;
+        /* CRÍTICO: la regla ".sidebar" del bloque "MENÚ PREMIUM" (más abajo en
+           este archivo, fuera de media query) declara `position: relative` y
+           `isolation: isolate`, y al aparecer DESPUÉS sobrescribía este
+           `position: fixed`. Eso dejaba el sidebar en el flujo normal y atrapaba
+           al menú (.main-nav) dentro de su caja, por lo que el menú móvil se
+           veía recortado "arriba del mapa" y no se podía usar. Forzamos fixed. */
+        position: fixed !important;
         top: 0;
         left: 0;
         width: 100%;
@@ -1405,10 +1470,13 @@ body {
 
     .sidebar-header {
         pointer-events: auto; /* permitir clicks en header */
-        background: rgba(24, 25, 26, 0.9) !important;
+        /* Usar variables de tema para que el header responda a claro/oscuro.
+           Antes tenía un color oscuro fijo (rgba(24,25,26,0.9)) que en modo
+           claro dejaba texto oscuro sobre fondo oscuro (menú inutilizable). */
+        background: var(--glass-bg-strong) !important;
         backdrop-filter: blur(8px);
         -webkit-backdrop-filter: blur(8px);
-        border-bottom: 1px solid rgba(255,255,255,0.08);
+        border-bottom: 1px solid var(--glass-border);
         z-index: 10004;
         position: relative;
     }
@@ -1443,7 +1511,10 @@ body {
         max-height: 100vh;
         overflow-y: auto;
         -webkit-overflow-scrolling: touch;
-        background: rgba(24,25,26,0.99) !important;
+        /* Usar variables de tema: antes era un color oscuro fijo
+           (rgba(24,25,26,0.99)) que en modo claro dejaba el menú oscuro
+           con texto oscuro (invisible/inutilizable). */
+        background: var(--glass-bg-strong) !important;
         backdrop-filter: blur(14px);
         -webkit-backdrop-filter: blur(14px);
         border: none !important;
@@ -1539,11 +1610,12 @@ body {
         top: 12px;
         right: 12px;
         z-index: 10000;
-        background: rgba(24, 25, 26, 0.7);
+        /* Usar variables de tema para que responda a claro/oscuro. */
+        background: var(--glass-bg-strong);
         backdrop-filter: blur(8px);
         -webkit-backdrop-filter: blur(8px);
         color: var(--text-primary);
-        border: 1px solid rgba(255, 255, 255, 0.1);
+        border: 1px solid var(--glass-border);
         padding: 8px 12px;
         border-radius: 10px;
         display: flex;
@@ -1565,11 +1637,11 @@ body {
 
     #mobileCarouselOverlay .carousel-container {
         height: 128px; /* más bajo */
-        background: rgba(24, 25, 26, 0.6);
+        background: var(--glass-bg-strong);
         color: var(--text-primary);
         backdrop-filter: blur(10px);
         -webkit-backdrop-filter: blur(10px);
-        border: 1px solid rgba(255,255,255,0.12);
+        border: 1px solid var(--glass-border);
     }
 
     /* Permitir desplazamiento vertical del documento mientras capturamos swipe horizontal */
@@ -1590,10 +1662,10 @@ body {
 
     #mobileCarouselOverlay .carousel-container {
         height: 128px; /* más bajo */
-        background: rgba(24, 25, 26, 0.6);
+        background: var(--glass-bg-strong);
         backdrop-filter: blur(10px);
         -webkit-backdrop-filter: blur(10px);
-        border: 1px solid rgba(255,255,255,0.12);
+        border: 1px solid var(--glass-border);
     }
 
     /* Permitir desplazamiento vertical del documento mientras capturamos swipe horizontal */
@@ -2060,6 +2132,355 @@ body.wallet-page .header {
 .setting-item .version {
     color: var(--text-light);
     font-size: 0.9rem;
+}
+
+/* ===== SECCIÓN DE PRECIOS (rediseño) ===== */
+.pricing-section {
+    overflow: hidden;
+}
+
+.pricing-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.pricing-header-icon {
+    flex: 0 0 auto;
+    width: 52px;
+    height: 52px;
+    border-radius: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.4rem;
+    color: #fff;
+    background: linear-gradient(135deg, var(--primary-color, #60c48e), #059669);
+    box-shadow: 0 8px 20px -6px rgba(16, 185, 129, 0.5);
+}
+
+.pricing-header-text h2 {
+    margin: 0 0 0.25rem 0;
+    font-size: 1.25rem;
+    color: var(--text-primary);
+}
+
+.pricing-header-text p {
+    margin: 0;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}
+
+/* Tarjeta destacada con el desglose en vivo */
+.pricing-hero {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1.5rem;
+    border-radius: 16px;
+    margin-bottom: 1.75rem;
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.14), rgba(5, 150, 105, 0.06));
+    border: 1px solid rgba(16, 185, 129, 0.35);
+}
+
+.pricing-hero-main {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.pricing-hero-label {
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+.pricing-hero-value {
+    display: flex;
+    align-items: baseline;
+    gap: 0.35rem;
+    color: var(--text-primary);
+    font-weight: 700;
+}
+
+.pricing-hero-currency {
+    font-size: 1.5rem;
+    color: var(--primary-color, #60c48e);
+}
+
+.pricing-hero-value #heroMessagePrice {
+    font-size: 2.75rem;
+    line-height: 1;
+}
+
+.pricing-hero-unit {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+.pricing-hero-breakdown {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    min-width: 220px;
+}
+
+.pricing-breakdown-item {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}
+
+.pricing-breakdown-item strong {
+    margin-left: auto;
+    color: var(--text-primary);
+    font-weight: 700;
+}
+
+.pricing-breakdown-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+}
+
+.pricing-breakdown-dot.client { background: #60c48e; }
+.pricing-breakdown-dot.provider { background: #3b82f6; }
+.pricing-breakdown-dot.fee { background: #f59e0b; }
+
+/* Controles con slider + input */
+.pricing-control {
+    margin-bottom: 1.5rem;
+}
+
+.pricing-control-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.pricing-control-head label {
+    font-weight: 600;
+    color: var(--text-primary);
+    font-size: 0.95rem;
+}
+
+.pricing-input-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    background: var(--background);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 0.35rem 0.6rem;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.pricing-input-wrap:focus-within {
+    border-color: var(--primary-color, #60c48e);
+    box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
+}
+
+.pricing-input-prefix {
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+.pricing-input-wrap input[type="number"] {
+    width: 90px;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 1rem;
+    font-weight: 600;
+    text-align: right;
+    outline: none;
+    -moz-appearance: textfield;
+}
+
+.pricing-input-wrap input[type="number"]::-webkit-outer-spin-button,
+.pricing-input-wrap input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+/* Slider */
+.pricing-range {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--border-color);
+    outline: none;
+    cursor: pointer;
+}
+
+.pricing-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--primary-color, #60c48e), #059669);
+    border: 3px solid var(--background-secondary);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+    cursor: pointer;
+    transition: transform 0.15s ease;
+}
+
+.pricing-range::-webkit-slider-thumb:hover {
+    transform: scale(1.12);
+}
+
+.pricing-range::-moz-range-thumb {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--primary-color, #60c48e), #059669);
+    border: 3px solid var(--background-secondary);
+    cursor: pointer;
+}
+
+.pricing-range-scale {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 0.4rem;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+/* Ajustes avanzados colapsables */
+.pricing-advanced {
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    margin-bottom: 1.5rem;
+    overflow: hidden;
+}
+
+.pricing-advanced summary {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.9rem 1.1rem;
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--text-primary);
+    list-style: none;
+    user-select: none;
+}
+
+.pricing-advanced summary::-webkit-details-marker {
+    display: none;
+}
+
+.pricing-advanced-chevron {
+    margin-left: auto;
+    transition: transform 0.25s ease;
+    color: var(--text-secondary);
+}
+
+.pricing-advanced[open] .pricing-advanced-chevron {
+    transform: rotate(180deg);
+}
+
+.pricing-advanced-body {
+    padding: 0.5rem 1.1rem 1.1rem;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1rem;
+}
+
+.pricing-advanced-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.pricing-advanced-item label {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.pricing-advanced-item .pricing-input-wrap {
+    width: 100%;
+    justify-content: space-between;
+}
+
+.pricing-advanced-item .pricing-input-wrap input[type="number"] {
+    width: 100%;
+    text-align: left;
+}
+
+/* Acciones y resumen */
+.pricing-actions {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.pricing-summary {
+    margin: 0.9rem 0 0 0;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+.pricing-summary[data-status="success"] { color: #22c55e; }
+.pricing-summary[data-status="error"] { color: #ef4444; }
+
+/* Responsive de la sección de precios */
+@media (max-width: 600px) {
+    .pricing-hero {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 1.25rem;
+    }
+
+    .pricing-hero-breakdown {
+        min-width: 0;
+    }
+
+    .pricing-hero-value #heroMessagePrice {
+        font-size: 2.25rem;
+    }
+
+    .pricing-control-head {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0.5rem;
+    }
+
+    .pricing-input-wrap {
+        width: 100%;
+        justify-content: space-between;
+    }
+
+    .pricing-input-wrap input[type="number"] {
+        width: 100%;
+        text-align: left;
+    }
+
+    .pricing-actions {
+        flex-direction: column;
+    }
+
+    .pricing-actions button {
+        width: 100%;
+        justify-content: center;
+    }
 }
 
 .btn-secondary {
@@ -3458,6 +3879,267 @@ body::-webkit-scrollbar-thumb:hover {
     .carousel-profile-avatar,
     #mobileCarouselOverlay .carousel-btn {
         transition: none !important;
+    }
+}
+
+/* ============================================================
+   ===== FIX DEFINITIVO: MENÚ MÓVIL EN PRIMER PLANO =====
+   El menú móvil (.main-nav) vive dentro de .sidebar. Los bloques
+   "premium" (más arriba) aplican backdrop-filter / isolation /
+   transform al .sidebar, lo que crea un "containing block" y un
+   stacking context que ATRAPAN al menú position:fixed, dejándolo
+   recortado "arriba del mapa" e inutilizable.
+
+   Estas reglas van AL FINAL del archivo para ganar la cascada y
+   neutralizan cualquier containing block / stacking context en
+   móvil, forzando al menú a cubrir TODA la pantalla por encima
+   del mapa y de cualquier control.
+   ============================================================ */
+@media (max-width: 768px) {
+    /* 1) El sidebar NO debe crear stacking context ni containing block
+          en móvil (anula backdrop-filter, isolation, transform, filter,
+          perspective, contain y will-change heredados de bloques previos). */
+    .sidebar {
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        width: 100% !important;
+        height: auto !important;
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        -webkit-backdrop-filter: none !important;
+        backdrop-filter: none !important;
+        isolation: auto !important;
+        transform: none !important;
+        filter: none !important;
+        perspective: none !important;
+        contain: none !important;
+        will-change: auto !important;
+        pointer-events: none !important;
+        z-index: 10001 !important;
+    }
+
+    /* 2) El menú abierto: overlay full-screen REAL, por encima de todo. */
+    body.mobile-menu-open .sidebar {
+        z-index: 2147483000 !important;
+        pointer-events: auto !important;
+    }
+
+    body.mobile-menu-open .main-nav {
+        display: flex !important;
+        flex-direction: column !important;
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        bottom: 0 !important;
+        width: 100vw !important;
+        height: 100vh !important;
+        max-height: 100vh !important;
+        margin: 0 !important;
+        padding: 1rem 1.25rem calc(1rem + env(safe-area-inset-bottom, 0px)) !important;
+        overflow-y: auto !important;
+        -webkit-overflow-scrolling: touch !important;
+        background: var(--glass-bg-strong) !important;
+        -webkit-backdrop-filter: blur(14px) !important;
+        backdrop-filter: blur(14px) !important;
+        border: none !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+        transform: none !important;
+        filter: none !important;
+        isolation: auto !important;
+        pointer-events: auto !important;
+        z-index: 2147483001 !important;
+    }
+
+    /* 3) El header del sidebar (con el botón de cerrar) siempre por encima
+          del menú para poder cerrarlo. */
+    body.mobile-menu-open .sidebar-header {
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        z-index: 2147483002 !important;
+        pointer-events: auto !important;
+    }
+
+    /* 4) Enlaces del menú: clicables y visibles. */
+    body.mobile-menu-open .main-nav ul {
+        display: flex !important;
+        flex-direction: column !important;
+        gap: 0.35rem !important;
+        list-style: none !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+
+    body.mobile-menu-open .main-nav ul li a {
+        display: flex !important;
+        align-items: center !important;
+        gap: 0.75rem !important;
+        padding: 0.9rem 1rem !important;
+        color: var(--text-primary) !important;
+        text-decoration: none !important;
+        border-radius: var(--border-radius) !important;
+        position: relative !important;
+        z-index: 2147483003 !important;
+        pointer-events: auto !important;
+    }
+
+    /* 5) Ocultar botones flotantes/overlays mientras el menú está abierto
+          para que no interfieran con los clics. */
+    body.mobile-menu-open .filter-floating,
+    body.mobile-menu-open .mobile-overlays,
+    body.mobile-menu-open #mobileCarouselOverlay,
+    body.mobile-menu-open .floating-btn {
+        display: none !important;
+    }
+}
+
+/* ============================================================
+   ===== SETTINGS: PERFIL Y FOTOS =====
+   Estilos para la sección de perfil (nombre editable) y la
+   cuadrícula de fotos del perfil (reemplazar/eliminar).
+   ============================================================ */
+.settings-hint {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    margin: 0 0 1rem 0;
+    line-height: 1.5;
+}
+
+.setting-item-actions {
+    justify-content: flex-end;
+    border-bottom: none;
+    padding-top: 1rem;
+}
+
+.setting-item-actions .btn-primary,
+.setting-item-actions .btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+/* Cuadrícula de fotos del perfil */
+.settings-photos-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 0.85rem;
+    margin-bottom: 0.5rem;
+}
+
+.settings-photo-item {
+    position: relative;
+    aspect-ratio: 1;
+    border-radius: var(--border-radius);
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+    background: var(--background);
+    box-shadow: var(--shadow);
+}
+
+.settings-photo-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.settings-photo-actions {
+    position: absolute;
+    inset: auto 0 0 0;
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.4rem;
+    padding: 0.4rem;
+    background: linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.65) 100%);
+    opacity: 0;
+    transition: opacity 0.2s ease;
+}
+
+.settings-photo-item:hover .settings-photo-actions,
+.settings-photo-item:focus-within .settings-photo-actions {
+    opacity: 1;
+}
+
+.settings-photo-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    border: none;
+    cursor: pointer;
+    color: #fff;
+    background: rgba(255, 255, 255, 0.18);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.settings-photo-btn:hover {
+    background: var(--primary-color);
+    transform: scale(1.08);
+}
+
+.settings-photo-btn.danger:hover {
+    background: var(--danger-color);
+}
+
+.settings-photo-btn input[type="file"] {
+    display: none;
+}
+
+/* Tarjeta "Agregar foto" */
+.settings-photo-add {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    aspect-ratio: 1;
+    border-radius: var(--border-radius);
+    border: 2px dashed var(--border-color);
+    background: var(--background);
+    color: var(--text-secondary);
+    cursor: pointer;
+    text-align: center;
+    padding: 0.5rem;
+    transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease, transform 0.2s ease;
+}
+
+.settings-photo-add:hover {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+    background: var(--background-tertiary);
+    transform: translateY(-2px);
+}
+
+.settings-photo-add i {
+    font-size: 1.5rem;
+}
+
+.settings-photo-add span {
+    font-size: 0.8rem;
+    font-weight: 500;
+}
+
+.settings-photo-add input[type="file"] {
+    display: none;
+}
+
+/* En móvil, mostrar siempre las acciones de las fotos (no hay hover) */
+@media (max-width: 768px) {
+    .settings-photo-actions {
+        opacity: 1;
+    }
+
+    .settings-photos-grid {
+        grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
     }
 }
 

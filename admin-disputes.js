@@ -221,9 +221,12 @@ class AdminDisputes {
 
     getStatusText(status) {
         const statusMap = {
+            'open': 'Abierta',
             'pending': 'Pendiente',
+            'resolving': 'En proceso',
             'resolved': 'Resuelta',
-            'in_review': 'En Revisión'
+            'in_review': 'En Revisión',
+            'rejected': 'Rechazada'
         };
         return statusMap[status] || status;
     }
@@ -536,9 +539,13 @@ class AdminDisputes {
             return;
         }
 
-        // Verificar si la disputa ya está resuelta
+        // Verificar si la disputa ya está resuelta o en proceso
         if (this.currentDispute.status === 'resolved') {
             this.showError('Esta disputa ya ha sido resuelta y no puede ser resuelta nuevamente');
+            return;
+        }
+        if (this.currentDispute.status === 'resolving') {
+            this.showError('Esta disputa está siendo resuelta por otro administrador');
             return;
         }
 
@@ -559,14 +566,34 @@ class AdminDisputes {
             return;
         }
 
-        // Verificar si la disputa ya está resuelta
-        if (this.currentDispute.status === 'resolved') {
-            this.showError('Esta disputa ya ha sido resuelta');
+        // Reclamo ATÓMICO: solo una resolución puede pasar de 'open' a
+        // 'resolving'. Evita doble pago entre dos admins/pestañas.
+        let claimed = false;
+        try {
+            const res = await this.database.ref(`disputes/${this.currentDispute.id}`).transaction(function (cur) {
+                if (!cur) return cur;
+                if (cur.status !== 'open') return; // aborta (ya en curso/resuelta)
+                cur.status = 'resolving';
+                cur.resolvingBy = 'admin';
+                return cur;
+            });
+            claimed = !!(res && res.committed);
+        } catch (e) {
+            console.error('❌ Error reclamando disputa:', e);
+        }
+        if (!claimed) {
+            this.showError('Esta disputa ya está en proceso de resolución o ya fue resuelta');
             return;
         }
 
         try {
             const resolution = selectedResolution.value;
+
+            // 1) Procesar el pago PRIMERO con operación atómica e idempotente.
+            //    Si falla, la disputa vuelve a 'open' (no queda "resuelta sin pagar").
+            await this.handlePaymentResolution(resolution);
+
+            // 2) Marcar la disputa como resuelta.
             const resolutionData = {
                 status: 'resolved',
                 resolution: resolution,
@@ -574,13 +601,11 @@ class AdminDisputes {
                 resolvedAt: Date.now(),
                 resolvedBy: 'admin'
             };
-
-            // Update dispute
             await this.database.ref(`disputes/${this.currentDispute.id}`).update(resolutionData);
 
             // Actualizar disputa local para tiempo real
             this.currentDispute = { ...this.currentDispute, ...resolutionData };
-            this.disputes = this.disputes.map(d => 
+            this.disputes = this.disputes.map(d =>
                 d.id === this.currentDispute.id ? this.currentDispute : d
             );
 
@@ -594,9 +619,6 @@ class AdminDisputes {
 
             await this.database.ref(`chats/${this.currentDispute.chatId}/messages`).push(resolutionMessage);
 
-            // Handle payment based on resolution
-            await this.handlePaymentResolution(resolution);
-
             this.showSuccess('Disputa resuelta correctamente');
             this.closeModal('resolutionModal');
             
@@ -606,6 +628,16 @@ class AdminDisputes {
             
         } catch (error) {
             console.error('❌ Error resolviendo disputa:', error);
+            // Revertir el claim para permitir reintento.
+            try {
+                await this.database.ref(`disputes/${this.currentDispute.id}`).transaction(function (cur) {
+                    if (!cur) return cur;
+                    if (cur.status !== 'resolving') return;
+                    cur.status = 'open';
+                    cur.resolvingBy = null;
+                    return cur;
+                });
+            } catch (_) {}
             this.showError('Error resolviendo disputa');
         }
     }
@@ -626,110 +658,66 @@ class AdminDisputes {
     async handlePaymentResolution(resolution) {
         if (!this.currentDispute) return;
 
-        try {
-            const amount = this.currentDispute.amount || 0;
-            const disputeId = this.currentDispute.id;
-            const timestamp = Date.now();
-            
-            console.log(`💰 Procesando pago de disputa ${disputeId}: ${resolution} - $${amount}`);
-            
-            if (resolution === 'client') {
-                // Return money to client - usar 'balance' en lugar de 'wallet'
-                const balanceRef = this.database.ref(`users/${this.currentDispute.clientId}/balance`);
-                const snap = await balanceRef.once('value');
-                const current = parseInt(snap.val() || '0', 10);
-                await balanceRef.set(current + amount);
-                
-                // Registrar micro transacción
-                await this.recordMicroTransaction(
-                    this.currentDispute.clientId, 
-                    amount, 
-                    'in',
-                    'dispute_resolution_client',
-                    `Disputa ${disputeId} resuelta a favor del cliente`
-                );
-                
-                console.log(`✅ $${amount} devuelto al cliente ${this.currentDispute.clientId}`);
-                
-            } else if (resolution === 'provider') {
-                // Give money to provider - usar 'balance' en lugar de 'wallet'
-                const balanceRef = this.database.ref(`users/${this.currentDispute.providerId}/balance`);
-                const snap = await balanceRef.once('value');
-                const current = parseInt(snap.val() || '0', 10);
-                await balanceRef.set(current + amount);
-                
-                // Registrar micro transacción
-                await this.recordMicroTransaction(
-                    this.currentDispute.providerId, 
-                    amount, 
-                    'in',
-                    'dispute_resolution_provider',
-                    `Disputa ${disputeId} resuelta a favor del proveedor`
-                );
-                
-                console.log(`✅ $${amount} transferido al proveedor ${this.currentDispute.providerId}`);
-                
-            } else if (resolution === 'split') {
-                // Split money 50/50
-                const halfAmount = amount / 2;
-                
-                // Cliente recibe la mitad
-                const clientBalanceRef = this.database.ref(`users/${this.currentDispute.clientId}/balance`);
-                const clientSnap = await clientBalanceRef.once('value');
-                const clientCurrent = parseInt(clientSnap.val() || '0', 10);
-                await clientBalanceRef.set(clientCurrent + halfAmount);
-                
-                // Proveedor recibe la mitad
-                const providerBalanceRef = this.database.ref(`users/${this.currentDispute.providerId}/balance`);
-                const providerSnap = await providerBalanceRef.once('value');
-                const providerCurrent = parseInt(providerSnap.val() || '0', 10);
-                await providerBalanceRef.set(providerCurrent + halfAmount);
-                
-                // Registrar micro transacciones
-                await this.recordMicroTransaction(
-                    this.currentDispute.clientId, 
-                    halfAmount, 
-                    'in',
-                    'dispute_resolution_split_client',
-                    `Disputa ${disputeId} resuelta con división 50/50 - parte cliente`
-                );
-                
-                await this.recordMicroTransaction(
-                    this.currentDispute.providerId, 
-                    halfAmount, 
-                    'in',
-                    'dispute_resolution_split_provider',
-                    `Disputa ${disputeId} resuelta con división 50/50 - parte proveedor`
-                );
-                
-                console.log(`✅ $${halfAmount} transferido a cliente y $${halfAmount} a proveedor`);
-            }
+        const amount = this.currentDispute.amount || 0;
+        const disputeId = this.currentDispute.id;
 
-            console.log('✅ Pago procesado correctamente');
-        } catch (error) {
-            console.error('❌ Error procesando pago:', error);
-            throw error;
+        console.log(`💰 Procesando pago de disputa ${disputeId}: ${resolution} - $${amount}`);
+
+        // Pago ATÓMICO e IDEMPOTENTE vía DeseoMoney (transacción + opId + ledger).
+        // Antes se hacía read-then-write directo (doble gasto sin ledger).
+        const money = window.DeseoMoney;
+        if (!money || typeof money.credit !== 'function') {
+            throw new Error('DeseoMoney no disponible; abortando pago de disputa por seguridad.');
         }
+
+        const creditOne = async (userId, amt, label) => {
+            const opId = `dispute_${disputeId}_${label}`;
+            const res = await money.credit(this.database, userId, amt, {
+                reason: `dispute_resolution_${label}`,
+                disputeId: disputeId,
+                opId: opId
+            });
+            if (!res || res.ok === false) {
+                throw new Error(`No se pudo acreditar la disputa a ${label}: ${(res && res.reason) || 'desconocido'}`);
+            }
+            await this.recordMicroTransaction(
+                userId, amt, 'in',
+                `dispute_resolution_${label}`,
+                `Disputa ${disputeId} resuelta (${label})`,
+                opId
+            );
+        };
+
+        if (resolution === 'client') {
+            await creditOne(this.currentDispute.clientId, amount, 'client');
+            console.log(`✅ $${amount} devuelto al cliente ${this.currentDispute.clientId}`);
+        } else if (resolution === 'provider') {
+            await creditOne(this.currentDispute.providerId, amount, 'provider');
+            console.log(`✅ $${amount} transferido al proveedor ${this.currentDispute.providerId}`);
+        } else if (resolution === 'split') {
+            const halfAmount = Math.floor(amount / 2);
+            await creditOne(this.currentDispute.clientId, halfAmount, 'split_client');
+            await creditOne(this.currentDispute.providerId, amount - halfAmount, 'split_provider');
+            console.log(`✅ Split de $${amount} aplicado`);
+        }
+        console.log('✅ Pago procesado correctamente');
     }
 
-    async recordMicroTransaction(userId, amount, direction, reason, description) {
-        try {
-            const microId = `micro_${Date.now()}`;
-            const microTransaction = {
-                id: microId,
-                direction: direction, // 'in' o 'out'
-                reason: reason,
-                amount: amount,
-                description: description,
-                timestamp: new Date().toISOString(),
-                disputeId: this.currentDispute.id
-            };
-            
-            await this.database.ref(`users/${userId}/microtransactions/${microId}`).set(microTransaction);
-            console.log(`📝 Micro transacción registrada para usuario ${userId}: ${reason} - $${amount} (${direction})`);
-        } catch (error) {
-            console.error('❌ Error registrando micro transacción:', error);
-        }
+    async recordMicroTransaction(userId, amount, direction, reason, description, opId) {
+        // No tragar errores: si el asiento falla tras un pago exitoso, debe
+        // propagarse para que el llamador lo sepa (antes quedaba silencioso).
+        const microId = opId ? `micro_${opId}` : `micro_${this.currentDispute?.id || 'x'}_${Date.now()}`;
+        const microTransaction = {
+            id: microId,
+            direction: direction, // 'in' o 'out'
+            reason: reason,
+            amount: amount,
+            description: description,
+            timestamp: new Date().toISOString(),
+            disputeId: this.currentDispute?.id
+        };
+        await this.database.ref(`users/${userId}/microtransactions/${microId}`).set(microTransaction);
+        console.log(`📝 Micro transacción registrada para usuario ${userId}: ${reason} - $${amount} (${direction})`);
     }
 
     updateDisputeList() {

@@ -1,0 +1,6 @@
+# Para GitHub Pages / cualquier host que sirva archivos .html directamente.
+# Fuerza que los archivos se sirvan tal cual, sin "clean URLs", para no perder
+# el query string (?chatId=...&userId=...) que rompía la apertura de chats.
+
+# Evita el procesamiento Jekyll (puede romper archivos con ciertos caracteres).
+include: []

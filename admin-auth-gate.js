@@ -92,6 +92,41 @@
         return false;
     }
 
+    /**
+     * Verificación server-side (defensa en profundidad): pide al backend que
+     * valide el token de Clerk y devuelva isAdmin (derivado de ADMIN_USER_IDS).
+     * Si el endpoint no está configurado o falla, NO bloquea (el gate cliente
+     * ya validó); pero si responde explícitamente isAdmin=false, se deniega.
+     * @returns {Promise<boolean>} true si se permite continuar.
+     */
+    function verifyServerSide() {
+        var cfg = (window.CONFIG && window.CONFIG.API) || {};
+        var endpoint = cfg.VERIFY_ENDPOINT || cfg.AUTH_VERIFY_ENDPOINT;
+        if (!endpoint) return Promise.resolve(true); // sin backend configurado: no bloquear
+        if (!window.Clerk || typeof window.Clerk.session === 'undefined') return Promise.resolve(true);
+
+        return window.Clerk.session.getToken()
+            .then(function (token) {
+                if (!token) return true;
+                return fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+                    body: JSON.stringify({ token: token })
+                });
+            })
+            .then(function (res) {
+                if (!res || !res.ok) return true; // fallo de red/servidor: no bloquear
+                return res.json();
+            })
+            .then(function (data) {
+                if (data && data.valid === true && data.isAdmin === false) {
+                    return false; // el backend dice que NO es admin -> denegar
+                }
+                return true;
+            })
+            .catch(function () { return true; });
+    }
+
     function bootGate() {
         var adminCfg = getAdminConfig();
 
@@ -110,12 +145,19 @@
                     deny('Tu cuenta no tiene permisos de administrador.');
                     return;
                 }
-                // Autorizado: quitar overlay y arrancar el dashboard.
-                var overlay = document.getElementById(GATE_ID);
-                if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
-                document.documentElement.style.visibility = 'visible';
-                window.__DESEO_ADMIN_GRANTED__ = true;
-                document.dispatchEvent(new CustomEvent('deseoAdminGranted'));
+                // Segunda barrera: validar contra el backend (si está configurado).
+                verifyServerSide().then(function (allowed) {
+                    if (!allowed) {
+                        deny('Tu cuenta no tiene permisos de administrador (verificación del servidor).');
+                        return;
+                    }
+                    // Autorizado: quitar overlay y arrancar el dashboard.
+                    var overlay = document.getElementById(GATE_ID);
+                    if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+                    document.documentElement.style.visibility = 'visible';
+                    window.__DESEO_ADMIN_GRANTED__ = true;
+                    document.dispatchEvent(new CustomEvent('deseoAdminGranted'));
+                });
             };
 
             if (typeof window.Clerk.load === 'function') {
