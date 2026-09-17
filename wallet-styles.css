@@ -102,6 +102,30 @@ body.wallet-page {
     font-weight: 700;
 }
 
+/* Animación de "flash" cuando el saldo se actualiza en tiempo real
+   (p. ej. al aprobarse una recarga). Se activa desde wallet-inline.js
+   añadiendo la clase .balance-updated al elemento #totalBalance. */
+@keyframes balanceFlash {
+    0% {
+        transform: scale(1);
+        text-shadow: 0 0 0 rgba(255, 255, 255, 0);
+    }
+    30% {
+        transform: scale(1.12);
+        text-shadow: 0 0 18px rgba(255, 255, 255, 0.9);
+    }
+    100% {
+        transform: scale(1);
+        text-shadow: 0 0 0 rgba(255, 255, 255, 0);
+    }
+}
+
+#totalBalance.balance-updated {
+    display: inline-block;
+    animation: balanceFlash 1.2s ease-out;
+    color: #eafff5;
+}
+
 .balance-actions {
     display: flex;
     gap: 1rem;

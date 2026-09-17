@@ -1,26 +1,33 @@
-/* Admin Disputes Page Styles */
+/* ============================================================
+   ADMIN DISPUTES — Rediseño moderno (solo estilos, sin tocar lógica)
+   Identidad Deseo: verde #60c48e + acento rosa/púrpura #e88dff
+   ============================================================ */
 .admin-disputes-page {
     background: var(--background);
     color: var(--text-primary);
-    font-family: 'Inter', sans-serif;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     min-height: 100vh;
 }
 
-/* Header */
+/* ============================================================
+   HEADER
+   ============================================================ */
 .admin-header {
     background: var(--background-secondary);
     border-bottom: 1px solid var(--border-color);
-    padding: 1rem 2rem;
+    padding: 1rem 1.5rem;
     position: sticky;
     top: 0;
     z-index: 100;
+    backdrop-filter: blur(10px);
 }
 
 .header-content {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    max-width: 1400px;
+    gap: 1rem;
+    max-width: 1500px;
     margin: 0 auto;
 }
 
@@ -28,112 +35,135 @@
     display: flex;
     align-items: center;
     gap: 1rem;
+    min-width: 0;
 }
 
 .back-btn {
     background: var(--background-tertiary);
     border: 1px solid var(--border-color);
     color: var(--text-primary);
-    padding: 0.5rem;
-    border-radius: 8px;
+    padding: 0.55rem 0.7rem;
+    border-radius: 10px;
     cursor: pointer;
     transition: var(--transition);
+    flex-shrink: 0;
 }
 
 .back-btn:hover {
     background: var(--hover-bg);
-    border-color: var(--border-hover);
+    border-color: var(--primary-color);
+    color: var(--primary-color);
 }
 
 .header-title h1 {
     margin: 0;
-    font-size: 1.5rem;
-    font-weight: 600;
+    font-size: 1.35rem;
+    font-weight: 700;
     color: var(--text-primary);
+    letter-spacing: -0.01em;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
 }
 
 .header-title h1 i {
     color: var(--accent-color);
-    margin-right: 0.5rem;
 }
 
 .header-subtitle {
-    margin: 0;
+    margin: 2px 0 0 0;
     color: var(--text-secondary);
-    font-size: 0.875rem;
+    font-size: 0.82rem;
 }
 
 .header-right {
     display: flex;
     align-items: center;
-    gap: 1rem;
+    gap: 0.6rem;
+    flex-shrink: 0;
 }
 
 .theme-toggle, .logout-btn {
     background: var(--background-tertiary);
     border: 1px solid var(--border-color);
     color: var(--text-primary);
-    padding: 0.5rem 1rem;
-    border-radius: 8px;
+    padding: 0.55rem 0.8rem;
+    border-radius: 10px;
     cursor: pointer;
     transition: var(--transition);
-    font-size: 0.875rem;
+    font-size: 0.9rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .theme-toggle:hover, .logout-btn:hover {
     background: var(--hover-bg);
-    border-color: var(--border-hover);
+    border-color: var(--primary-color);
+    color: var(--primary-color);
 }
 
-/* Main Container */
+/* ============================================================
+   MAIN CONTAINER
+   ============================================================ */
 .admin-main-container {
     display: grid;
-    grid-template-columns: 350px 1fr;
-    max-width: 1400px;
+    grid-template-columns: 360px 1fr;
+    max-width: 1500px;
     margin: 0 auto;
-    height: calc(100vh - 80px);
+    height: calc(100vh - 78px);
     gap: 1rem;
     padding: 1rem;
 }
 
-/* Disputes Panel */
+/* ============================================================
+   DISPUTES PANEL (LISTA)
+   ============================================================ */
 .disputes-panel {
     background: var(--background-secondary);
-    border-radius: 12px;
+    border-radius: 16px;
     border: 1px solid var(--border-color);
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    box-shadow: var(--shadow);
 }
 
 .panel-header {
-    padding: 1.5rem;
+    padding: 1.25rem 1.25rem 1rem;
     border-bottom: 1px solid var(--border-color);
 }
 
 .panel-header h3 {
-    margin: 0 0 1rem 0;
-    font-size: 1.125rem;
-    font-weight: 600;
+    margin: 0 0 0.85rem 0;
+    font-size: 1.05rem;
+    font-weight: 700;
     color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
 }
 
 .panel-header h3 i {
     color: var(--warning-color);
-    margin-right: 0.5rem;
 }
 
 .dispute-stats {
     display: flex;
-    gap: 1rem;
+    gap: 0.75rem;
+    flex-wrap: wrap;
 }
 
 .stat-item {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    font-size: 0.875rem;
+    gap: 0.4rem;
+    font-size: 0.8rem;
     color: var(--text-secondary);
+    background: var(--background-tertiary);
+    padding: 0.35rem 0.7rem;
+    border-radius: 20px;
+    border: 1px solid var(--border-color);
 }
 
 .stat-item i {
@@ -143,7 +173,7 @@
 .disputes-list {
     flex: 1;
     overflow-y: auto;
-    padding: 0.5rem;
+    padding: 0.75rem;
 }
 
 .empty-state {
@@ -155,7 +185,8 @@
 .empty-state i {
     font-size: 3rem;
     margin-bottom: 1rem;
-    opacity: 0.5;
+    opacity: 0.4;
+    color: var(--primary-color);
 }
 
 .empty-state h4 {
@@ -165,64 +196,82 @@
 
 .empty-state p {
     margin: 0;
-    font-size: 0.875rem;
+    font-size: 0.85rem;
 }
 
-/* Dispute Item */
+/* ============================================================
+   DISPUTE ITEM
+   ============================================================ */
 .dispute-item {
     background: var(--background);
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 12px;
     padding: 1rem;
-    margin-bottom: 0.5rem;
+    margin-bottom: 0.6rem;
     cursor: pointer;
     transition: var(--transition);
+    position: relative;
 }
 
 .dispute-item:hover {
-    border-color: var(--border-hover);
+    border-color: var(--primary-color);
     background: var(--background-tertiary);
+    transform: translateY(-1px);
 }
 
 .dispute-item.active {
     border-color: var(--primary-color);
     background: var(--background-tertiary);
+    box-shadow: 0 0 0 2px rgba(96, 196, 142, 0.2);
+}
+
+.dispute-item.active::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 12px;
+    bottom: 12px;
+    width: 3px;
+    border-radius: 3px;
+    background: linear-gradient(180deg, var(--primary-color), var(--accent-color));
 }
 
 .dispute-item-header {
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
+    gap: 0.5rem;
     margin-bottom: 0.5rem;
 }
 
 .dispute-item-id {
     font-weight: 600;
     color: var(--text-primary);
-    font-size: 0.875rem;
+    font-size: 0.85rem;
 }
 
 .dispute-item-status {
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    font-size: 0.75rem;
-    font-weight: 500;
+    padding: 0.25rem 0.6rem;
+    border-radius: 20px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    white-space: nowrap;
 }
 
 .dispute-item-status.pending {
-    background: rgba(255, 212, 0, 0.2);
+    background: rgba(245, 158, 11, 0.16);
     color: var(--warning-color);
 }
 
 .dispute-item-status.resolved {
-    background: rgba(0, 186, 124, 0.2);
+    background: rgba(16, 185, 129, 0.16);
     color: var(--success-color);
 }
 
 .dispute-item-amount {
-    font-weight: 600;
+    font-weight: 700;
     color: var(--primary-color);
-    font-size: 0.875rem;
+    font-size: 0.95rem;
     margin-bottom: 0.25rem;
 }
 
@@ -231,14 +280,17 @@
     color: var(--text-secondary);
 }
 
-/* Dispute Details Panel */
+/* ============================================================
+   DISPUTE DETAILS PANEL
+   ============================================================ */
 .dispute-details-panel {
     background: var(--background-secondary);
-    border-radius: 12px;
+    border-radius: 16px;
     border: 1px solid var(--border-color);
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    box-shadow: var(--shadow);
 }
 
 .no-dispute-selected {
@@ -253,7 +305,7 @@
 }
 
 .no-dispute-selected i {
-    font-size: 4rem;
+    font-size: 3.5rem;
     margin-bottom: 1rem;
     opacity: 0.5;
     color: var(--accent-color);
@@ -266,10 +318,12 @@
 
 .no-dispute-selected p {
     margin: 0;
-    font-size: 0.875rem;
+    font-size: 0.85rem;
 }
 
-/* Dispute Content */
+/* ============================================================
+   DISPUTE CONTENT
+   ============================================================ */
 .dispute-content {
     flex: 1;
     display: flex;
@@ -278,49 +332,50 @@
 }
 
 .dispute-header {
-    padding: 1.5rem;
+    padding: 1.25rem 1.5rem;
     border-bottom: 1px solid var(--border-color);
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
     gap: 1rem;
+    flex-wrap: wrap;
 }
 
 .dispute-info h2 {
-    margin: 0 0 0.5rem 0;
-    font-size: 1.25rem;
-    font-weight: 600;
+    margin: 0 0 0.6rem 0;
+    font-size: 1.2rem;
+    font-weight: 700;
     color: var(--text-primary);
 }
 
 .dispute-meta {
     display: flex;
-    gap: 1rem;
+    gap: 0.75rem;
     align-items: center;
     flex-wrap: wrap;
 }
 
 .dispute-status {
-    padding: 0.25rem 0.75rem;
+    padding: 0.3rem 0.8rem;
     border-radius: 20px;
-    font-size: 0.75rem;
-    font-weight: 500;
+    font-size: 0.72rem;
+    font-weight: 600;
 }
 
 .dispute-status.pending {
-    background: rgba(255, 212, 0, 0.2);
+    background: rgba(245, 158, 11, 0.16);
     color: var(--warning-color);
 }
 
 .dispute-status.resolved {
-    background: rgba(0, 186, 124, 0.2);
+    background: rgba(16, 185, 129, 0.16);
     color: var(--success-color);
 }
 
 .dispute-amount {
-    font-weight: 600;
+    font-weight: 700;
     color: var(--primary-color);
-    font-size: 0.875rem;
+    font-size: 0.9rem;
 }
 
 .dispute-date {
@@ -331,29 +386,36 @@
 .dispute-actions {
     display: flex;
     gap: 0.5rem;
+    flex-wrap: wrap;
 }
 
-/* Tabs */
+/* ============================================================
+   TABS
+   ============================================================ */
 .tabs-nav {
     display: flex;
     border-bottom: 1px solid var(--border-color);
     background: var(--background-tertiary);
+    gap: 0.25rem;
+    padding: 0.4rem 0.5rem 0;
 }
 
 .tab-btn {
     flex: 1;
     background: none;
     border: none;
-    padding: 1rem;
+    padding: 0.85rem 1rem;
     color: var(--text-secondary);
     cursor: pointer;
     transition: var(--transition);
-    font-size: 0.875rem;
-    font-weight: 500;
+    font-size: 0.85rem;
+    font-weight: 600;
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 0.5rem;
+    border-radius: 10px 10px 0 0;
+    border-bottom: 2px solid transparent;
 }
 
 .tab-btn:hover {
@@ -363,11 +425,13 @@
 
 .tab-btn.active {
     color: var(--primary-color);
-    border-bottom: 2px solid var(--primary-color);
+    border-bottom-color: var(--primary-color);
     background: var(--background-secondary);
 }
 
-/* Tab Content */
+/* ============================================================
+   TAB CONTENT
+   ============================================================ */
 .tab-content {
     flex: 1;
     overflow: hidden;
@@ -386,7 +450,9 @@
     display: flex;
 }
 
-/* Chat Tab */
+/* ============================================================
+   CHAT TAB
+   ============================================================ */
 .chat-container {
     flex: 1;
     display: flex;
@@ -395,21 +461,22 @@
 }
 
 .chat-header {
-    padding: 1rem 1.5rem;
+    padding: 0.85rem 1.5rem;
     border-bottom: 1px solid var(--border-color);
     background: var(--background-tertiary);
 }
 
 .chat-participants {
     display: flex;
-    gap: 2rem;
+    gap: 1.5rem;
+    flex-wrap: wrap;
 }
 
 .participant {
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    font-size: 0.875rem;
+    font-size: 0.85rem;
     color: var(--text-secondary);
 }
 
@@ -420,7 +487,7 @@
 .chat-messages {
     flex: 1;
     overflow-y: auto;
-    padding: 1rem 1.5rem;
+    padding: 1.25rem 1.5rem;
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
@@ -428,29 +495,32 @@
 
 .chat-message {
     max-width: 70%;
-    padding: 0.75rem 1rem;
-    border-radius: 12px;
-    font-size: 0.875rem;
-    line-height: 1.4;
+    padding: 0.7rem 1rem;
+    border-radius: 14px;
+    font-size: 0.85rem;
+    line-height: 1.45;
+    word-break: break-word;
 }
 
 .chat-message.admin {
     align-self: center;
-    background: var(--accent-color);
+    background: linear-gradient(135deg, var(--accent-color), #c084fc);
     color: white;
     max-width: 90%;
     text-align: center;
+    box-shadow: 0 4px 12px rgba(232, 141, 255, 0.25);
 }
 
 .chat-message.client {
     align-self: flex-start;
     background: var(--background-tertiary);
     color: var(--text-primary);
+    border: 1px solid var(--border-color);
 }
 
 .chat-message.provider {
     align-self: flex-end;
-    background: var(--primary-color);
+    background: linear-gradient(135deg, var(--primary-color), var(--primary-hover));
     color: white;
 }
 
@@ -471,30 +541,36 @@
     border: 1px solid var(--border-color);
     color: var(--text-primary);
     padding: 0.75rem 1rem;
-    border-radius: 8px;
-    font-size: 0.875rem;
+    border-radius: 10px;
+    font-size: 0.85rem;
+    font-family: inherit;
+    transition: var(--transition);
 }
 
 .input-group input:focus {
     outline: none;
     border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(96, 196, 142, 0.15);
 }
 
 .input-group button {
-    background: var(--primary-color);
+    background: linear-gradient(135deg, var(--primary-color), var(--primary-hover));
     border: none;
     color: white;
-    padding: 0.75rem 1rem;
-    border-radius: 8px;
+    padding: 0.75rem 1.1rem;
+    border-radius: 10px;
     cursor: pointer;
     transition: var(--transition);
 }
 
 .input-group button:hover {
-    background: var(--primary-hover);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(96, 196, 142, 0.3);
 }
 
-/* Evidence Tab */
+/* ============================================================
+   EVIDENCE TAB
+   ============================================================ */
 .evidence-container {
     flex: 1;
     overflow-y: auto;
@@ -507,7 +583,7 @@
 
 .evidence-section h4 {
     margin: 0 0 1rem 0;
-    font-size: 1rem;
+    font-size: 0.95rem;
     font-weight: 600;
     color: var(--text-primary);
     display: flex;
@@ -521,13 +597,13 @@
 
 .evidence-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
     gap: 1rem;
 }
 
 .evidence-item {
     position: relative;
-    border-radius: 8px;
+    border-radius: 12px;
     overflow: hidden;
     aspect-ratio: 1;
     cursor: pointer;
@@ -537,7 +613,8 @@
 
 .evidence-item:hover {
     border-color: var(--primary-color);
-    transform: scale(1.02);
+    transform: scale(1.03);
+    box-shadow: var(--shadow);
 }
 
 .evidence-item img {
@@ -551,10 +628,10 @@
     bottom: 0;
     left: 0;
     right: 0;
-    background: rgba(0, 0, 0, 0.8);
+    background: linear-gradient(transparent, rgba(0, 0, 0, 0.85));
     color: white;
-    padding: 0.5rem;
-    font-size: 0.75rem;
+    padding: 0.6rem 0.5rem 0.5rem;
+    font-size: 0.72rem;
 }
 
 .no-evidence {
@@ -567,10 +644,12 @@
 .no-evidence i {
     font-size: 2rem;
     margin-bottom: 0.5rem;
-    opacity: 0.5;
+    opacity: 0.4;
 }
 
-/* Details Tab */
+/* ============================================================
+   DETAILS TAB
+   ============================================================ */
 .details-container {
     flex: 1;
     overflow-y: auto;
@@ -583,7 +662,7 @@
 
 .detail-section h4 {
     margin: 0 0 1rem 0;
-    font-size: 1rem;
+    font-size: 0.95rem;
     font-weight: 600;
     color: var(--text-primary);
     display: flex;
@@ -597,6 +676,7 @@
 
 .detail-grid {
     display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
     gap: 0.75rem;
 }
 
@@ -604,22 +684,25 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 0.75rem;
+    gap: 1rem;
+    padding: 0.85rem 1rem;
     background: var(--background-tertiary);
-    border-radius: 8px;
+    border-radius: 10px;
     border: 1px solid var(--border-color);
 }
 
 .detail-item label {
     font-weight: 500;
     color: var(--text-secondary);
-    font-size: 0.875rem;
+    font-size: 0.82rem;
 }
 
 .detail-item span {
     color: var(--text-primary);
-    font-size: 0.875rem;
-    font-weight: 500;
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-align: right;
+    word-break: break-word;
 }
 
 .history-timeline {
@@ -629,9 +712,9 @@
 }
 
 .history-item {
-    padding: 0.75rem;
+    padding: 0.85rem 1rem;
     background: var(--background-tertiary);
-    border-radius: 8px;
+    border-radius: 10px;
     border-left: 3px solid var(--primary-color);
 }
 
@@ -639,46 +722,53 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 0.5rem;
     margin-bottom: 0.25rem;
+    flex-wrap: wrap;
 }
 
 .history-item-title {
-    font-weight: 500;
+    font-weight: 600;
     color: var(--text-primary);
-    font-size: 0.875rem;
+    font-size: 0.85rem;
 }
 
 .history-item-date {
-    font-size: 0.75rem;
+    font-size: 0.72rem;
     color: var(--text-secondary);
 }
 
 .history-item-description {
-    font-size: 0.75rem;
+    font-size: 0.78rem;
     color: var(--text-secondary);
 }
 
-/* Buttons */
+/* ============================================================
+   BUTTONS
+   ============================================================ */
 .btn-primary, .btn-secondary {
-    padding: 0.5rem 1rem;
-    border-radius: 8px;
-    font-size: 0.875rem;
-    font-weight: 500;
+    padding: 0.6rem 1.1rem;
+    border-radius: 10px;
+    font-size: 0.85rem;
+    font-weight: 600;
     cursor: pointer;
     transition: var(--transition);
     border: none;
-    display: flex;
+    display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 0.5rem;
+    white-space: nowrap;
 }
 
 .btn-primary {
-    background: var(--primary-color);
+    background: linear-gradient(135deg, var(--primary-color), var(--primary-hover));
     color: white;
 }
 
 .btn-primary:hover {
-    background: var(--primary-hover);
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(96, 196, 142, 0.35);
 }
 
 .btn-secondary {
@@ -689,35 +779,44 @@
 
 .btn-secondary:hover {
     background: var(--hover-bg);
-    border-color: var(--border-hover);
+    border-color: var(--primary-color);
+    color: var(--primary-color);
 }
 
-/* Modal */
+/* ============================================================
+   MODAL
+   ============================================================ */
 .modal {
     position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(0, 0, 0, 0.7);
+    inset: 0;
+    background: rgba(0, 0, 0, 0.65);
+    backdrop-filter: blur(4px);
     display: none;
     align-items: center;
     justify-content: center;
     z-index: 1000;
+    padding: 1rem;
 }
 
 .modal-content {
     background: var(--background-secondary);
-    border-radius: 12px;
+    border-radius: 16px;
     border: 1px solid var(--border-color);
-    max-width: 500px;
-    width: 90%;
-    max-height: 80vh;
+    max-width: 520px;
+    width: 100%;
+    max-height: 88vh;
     overflow-y: auto;
+    box-shadow: var(--shadow-lg);
+    animation: modalIn 0.25s ease;
+}
+
+@keyframes modalIn {
+    from { opacity: 0; transform: scale(0.96) translateY(10px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
 }
 
 .modal-header {
-    padding: 1.5rem;
+    padding: 1.25rem 1.5rem;
     border-bottom: 1px solid var(--border-color);
     display: flex;
     justify-content: space-between;
@@ -726,8 +825,8 @@
 
 .modal-header h2 {
     margin: 0;
-    font-size: 1.25rem;
-    font-weight: 600;
+    font-size: 1.15rem;
+    font-weight: 700;
     color: var(--text-primary);
     display: flex;
     align-items: center;
@@ -744,13 +843,16 @@
     color: var(--text-secondary);
     cursor: pointer;
     padding: 0.5rem;
-    border-radius: 4px;
+    border-radius: 50%;
     transition: var(--transition);
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .close-btn:hover {
     background: var(--hover-bg);
-    color: var(--text-primary);
+    color: var(--danger-color);
 }
 
 .modal-body {
@@ -758,18 +860,21 @@
 }
 
 .modal-footer {
-    padding: 1.5rem;
+    padding: 1.25rem 1.5rem;
     border-top: 1px solid var(--border-color);
     display: flex;
     gap: 0.5rem;
     justify-content: flex-end;
+    flex-wrap: wrap;
 }
 
-/* Resolution Options */
+/* ============================================================
+   RESOLUTION OPTIONS
+   ============================================================ */
 .resolution-options {
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: 0.85rem;
     margin-bottom: 1.5rem;
 }
 
@@ -788,31 +893,39 @@
     gap: 1rem;
     padding: 1rem;
     border: 2px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: 12px;
     cursor: pointer;
     transition: var(--transition);
+}
+
+.resolution-option label:hover {
+    border-color: var(--border-hover);
+    background: var(--hover-bg);
 }
 
 .resolution-option input[type="radio"]:checked + label {
     border-color: var(--primary-color);
     background: rgba(96, 196, 142, 0.1);
+    box-shadow: 0 0 0 3px rgba(96, 196, 142, 0.12);
 }
 
 .resolution-option label i {
-    font-size: 1.5rem;
+    font-size: 1.4rem;
+    flex-shrink: 0;
 }
 
 .resolution-option label div strong {
     display: block;
     color: var(--text-primary);
     font-weight: 600;
-    margin-bottom: 0.25rem;
+    margin-bottom: 0.2rem;
+    font-size: 0.9rem;
 }
 
 .resolution-option label div p {
     margin: 0;
     color: var(--text-secondary);
-    font-size: 0.875rem;
+    font-size: 0.8rem;
 }
 
 .resolution-comment {
@@ -824,6 +937,7 @@
     margin-bottom: 0.5rem;
     font-weight: 500;
     color: var(--text-primary);
+    font-size: 0.88rem;
 }
 
 .resolution-comment textarea {
@@ -832,24 +946,31 @@
     background: var(--background);
     border: 1px solid var(--border-color);
     color: var(--text-primary);
-    padding: 0.75rem;
-    border-radius: 8px;
-    font-size: 0.875rem;
+    padding: 0.85rem;
+    border-radius: 10px;
+    font-size: 0.85rem;
+    font-family: inherit;
     resize: vertical;
+    transition: var(--transition);
 }
 
 .resolution-comment textarea:focus {
     outline: none;
     border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(96, 196, 142, 0.15);
 }
 
-/* Utility Classes */
+/* ============================================================
+   UTILITY CLASSES
+   ============================================================ */
 .text-success { color: var(--success-color) !important; }
 .text-warning { color: var(--warning-color) !important; }
 .text-primary { color: var(--primary-color) !important; }
 .text-danger { color: var(--danger-color) !important; }
 
-/* Responsive */
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
 @media (max-width: 1024px) {
     .admin-main-container {
         grid-template-columns: 300px 1fr;
@@ -857,22 +978,97 @@
 }
 
 @media (max-width: 768px) {
+    .admin-header {
+        padding: 0.85rem 1rem;
+    }
+
+    .header-content {
+        flex-direction: row;
+        align-items: center;
+    }
+
+    .header-title h1 {
+        font-size: 1.05rem;
+    }
+
+    .header-subtitle {
+        display: none;
+    }
+
     .admin-main-container {
         grid-template-columns: 1fr;
         grid-template-rows: auto 1fr;
+        height: auto;
+        min-height: calc(100vh - 70px);
+        padding: 0.75rem;
+        gap: 0.75rem;
     }
-    
+
     .disputes-panel {
-        max-height: 300px;
+        max-height: 320px;
     }
-    
-    .header-content {
+
+    .dispute-details-panel {
+        min-height: 60vh;
+    }
+
+    .dispute-header {
         flex-direction: column;
-        gap: 1rem;
-        align-items: flex-start;
+        align-items: stretch;
     }
-    
-    .header-right {
-        align-self: flex-end;
+
+    .dispute-actions {
+        width: 100%;
+    }
+
+    .dispute-actions button {
+        flex: 1;
+    }
+
+    .tab-btn {
+        padding: 0.7rem 0.5rem;
+        font-size: 0.78rem;
+    }
+
+    .tab-btn span {
+        display: none;
+    }
+
+    .chat-message {
+        max-width: 85%;
+    }
+
+    .detail-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .modal-footer {
+        flex-direction: column-reverse;
+    }
+
+    .modal-footer button {
+        width: 100%;
+    }
+}
+
+@media (max-width: 480px) {
+    .header-title h1 {
+        font-size: 0.95rem;
+    }
+
+    .theme-toggle, .logout-btn {
+        padding: 0.5rem 0.65rem;
+    }
+
+    .evidence-grid {
+        grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    }
+
+    .chat-messages {
+        padding: 1rem;
+    }
+
+    .chat-input {
+        padding: 0.85rem 1rem;
     }
 }

@@ -46,6 +46,13 @@ _flows*.txt
 _final_*.txt
 temp_end.txt
 
+# ===== Páginas de prueba (no forman parte de la app) =====
+test-auth.html
+test-buttons.html
+
+# ===== Informes de auditoría con secretos/PII (NO versionar) =====
+INFORME_AUDITORIA.md
+
 
 
 

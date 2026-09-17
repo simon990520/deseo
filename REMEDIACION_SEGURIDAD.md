@@ -47,9 +47,9 @@ Se corrigieron todos los riesgos detectados en la auditoría que dependían solo
 ### 3.1 Rotar secretos expuestos (URGENTE)
 Las siguientes keys estuvieron en el código/cliente y deben rotarse en cada panel:
 
-1. **Mapbox**: token `pk.eyJ1Ijoic2ltb245OTA1MjAi...` → rotar en mapbox.com → pegar el nuevo en `config.local.js`.
+1. **Mapbox**: token `pk.eyJ1Ijoic2ltb245…` (token público de cliente) → rotar en mapbox.com → pegar el nuevo en `config.local.js`.
 2. **Gemini**: key `AIzaSy...` → rotar en aistudio.google.com → pegar en `.env` (`GEMINI_API_KEY`).
-3. **Bold**: key `H-HdPzur...` → rotar en bold.co → pegar en `.env` (`BOLD_API_KEY`).
+3. **Bold**: key `H-Hd…` (truncada) → rotar en bold.co → pegar en `.env` (`BOLD_API_KEY`).
 4. **Firebase**: revisar API key expuesta → restringir por dominio en Google Cloud Console.
 5. **Clerk secret key**: apareció en chat → rotar en dashboard.clerk.com.
 
