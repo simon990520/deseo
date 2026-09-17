@@ -1,0 +1,25 @@
+listo (DeseoMoney OK)
+
+[1] Mensaje: A paga el precio del dueño B
+  PASS transfer mensaje ok
+  PASS A debitado 390
+  PASS B acreditado 390
+
+[2] Reintento del MISMO mensaje -> idempotente
+  PASS reintento idempotente
+  PASS A sin doble cobro
+
+[3] Propina 1:1
+  PASS A -100
+  PASS B +100
+
+[4] Saldo insuficiente rechazado
+  PASS rechazado insufficient_funds
+
+[5] Retiro: reserva atómica
+  PASS reserva ok
+  PASS A -200 (reservado)
+  PASS reserva idempotente
+
+
+== RESULT: {"PASS":11,"FAIL":0} ==

@@ -1,0 +1,7 @@
+PASS  retiro: reserve 200 ok
+PASS  retiro: A=300 tras reservar
+PASS  retiro: idempotente (A=300)
+PASS  retiro: monto > saldo rechazado
+PASS  getBalance propio = 300
+
+=== E2E WITHDRAW: 5 pass, 0 fail ===

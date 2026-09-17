@@ -254,6 +254,19 @@ function getSettingsDatabase() {
     }
 }
 
+// Devuelve el cliente Supabase (para operaciones autoritativas de dinero/precio).
+async function getSettingsSupabase() {
+    try {
+        if (window.DeseoAuth && window.DeseoAuth.waitForSupabase) {
+            var c = await window.DeseoAuth.waitForSupabase;
+            if (c) return c;
+        }
+        if (window.DeseoSupabase) return window.DeseoSupabase;
+        if (window.DeseoAuth && window.DeseoAuth.getSupabase) return window.DeseoAuth.getSupabase();
+    } catch (_) { /* noop */ }
+    return null;
+}
+
 // Devuelve el id del usuario logueado (Clerk verificado o localStorage).
 function getCurrentUserId() {
     try {
@@ -278,6 +291,31 @@ var DEFAULT_MESSAGE_PRICE = 390;
 // Ruta canónica del precio por mensaje del dueño del perfil.
 function messagePriceRef(db, userId) {
     return db.ref('users/' + userId + '/profile/messagePrice');
+}
+
+// --- Versión Supabase (autoritativa) ---------------------------------------
+// El precio por mensaje vive en Supabase (tabla message_prices) y solo puede
+// cambiarse vía RPC (rpc_set_my_message_price). El cliente NO puede escribir
+// la tabla directamente (RLS sin policy de escritura arbitraria).
+async function sbSetMessagePrice(price) {
+    try {
+        var sb = await getSettingsSupabase();
+        if (!sb) return { ok: false, reason: 'no_supabase' };
+        var res = await sb.rpc('rpc_set_my_message_price', { p_price: price });
+        if (res.error) return { ok: false, reason: res.error.message };
+        return { ok: true, data: res.data };
+    } catch (e) { return { ok: false, reason: String(e && e.message || e) }; }
+}
+
+async function sbGetMessagePrice() {
+    try {
+        var sb = await getSettingsSupabase();
+        var userId = getCurrentUserId();
+        if (!sb || !userId) return null;
+        var res = await sb.from('message_prices').select('message_price').eq('user_id', userId).maybeSingle();
+        if (res.error) return null;
+        return res.data ? parseInt(res.data.message_price, 10) : null;
+    } catch (_) { return null; }
 }
 
 function setPricingStatus(msg, type) {
@@ -389,6 +427,19 @@ function setupPricingControls() {
 async function loadPricingFromFirebase() {
     var db = getSettingsDatabase();
     var userId = getCurrentUserId();
+    var costInput0 = document.getElementById('messageClientCost');
+    var costRange0 = document.getElementById('messageClientCostRange');
+
+    // 1) Supabase (autoritativo) — fuente principal del precio.
+    var sbPrice = await sbGetMessagePrice();
+    if (typeof sbPrice === 'number' && sbPrice >= 0) {
+        if (costInput0) costInput0.value = sbPrice;
+        if (costRange0) costRange0.value = Math.min(sbPrice, parseInt(costRange0.max, 10) || 5000);
+        renderPricingFields();
+        return;
+    }
+
+    // 2) Fallback Firebase (mientras se migra).
     if (!db || !userId) { renderPricingFields(); return; }
 
     var snap = null;
@@ -407,14 +458,9 @@ async function loadPricingFromFirebase() {
     renderPricingFields();
 }
 
-// Guarda el precio por mensaje del usuario en Firebase (ruta del perfil).
+// Guarda el precio por mensaje: Supabase (autoritativo) + espejo en Firebase.
 async function savePricing() {
-    var db = getSettingsDatabase();
     var userId = getCurrentUserId();
-    if (!db) {
-        setPricingStatus('Sin conexión a Firebase: no se pudo guardar el precio', 'error');
-        return;
-    }
     if (!userId) {
         setPricingStatus('Debes iniciar sesión para guardar tu precio', 'error');
         return;
@@ -430,7 +476,23 @@ async function savePricing() {
     var btn = document.getElementById('savePricingBtn');
     if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Guardando...'; }
     try {
-        await messagePriceRef(db, userId).set(value);
+        // Fuente autoritativa: Supabase RPC (solo el dueño puede fijar su precio).
+        var sr = await sbSetMessagePrice(value);
+        if (sr && sr.ok) {
+            updatePricingHero();
+            updatePricingSummary();
+            setPricingStatus('Precio guardado correctamente', 'success');
+            // Espejo en Firebase (no bloqueante, compatibilidad).
+            try {
+                var db = getSettingsDatabase();
+                if (db) await messagePriceRef(db, userId).set(value);
+            } catch (_) { /* noop */ }
+            return;
+        }
+        // Fallback Firebase si Supabase no está disponible.
+        var db2 = getSettingsDatabase();
+        if (!db2) { setPricingStatus('No se pudo guardar el precio (' + (sr && sr.reason) + ')', 'error'); return; }
+        await messagePriceRef(db2, userId).set(value);
         updatePricingHero();
         updatePricingSummary();
         setPricingStatus('Precio guardado correctamente', 'success');
@@ -442,7 +504,7 @@ async function savePricing() {
     }
 }
 
-// Restaura el precio por defecto en la UI y lo persiste en Firebase.
+// Restaura el precio por defecto en la UI y lo persiste (Supabase + Firebase).
 async function resetPricing() {
     if (!confirm('¿Restaurar el precio por defecto (' + formatCOP(DEFAULT_MESSAGE_PRICE) + ')?')) return;
     var db = getSettingsDatabase();
@@ -451,13 +513,18 @@ async function resetPricing() {
     var costRange = document.getElementById('messageClientCostRange');
     if (costInput) costInput.value = DEFAULT_MESSAGE_PRICE;
     if (costRange) costRange.value = DEFAULT_MESSAGE_PRICE;
-    if (db && userId) {
-        try {
+    try {
+        var sr = await sbSetMessagePrice(DEFAULT_MESSAGE_PRICE);
+        if (sr && sr.ok) {
+            setPricingStatus('Precio restaurado', 'success');
+        } else if (db && userId) {
             await messagePriceRef(db, userId).set(DEFAULT_MESSAGE_PRICE);
             setPricingStatus('Precio restaurado', 'success');
-        } catch (e) {
+        } else {
             setPricingStatus('No se pudo restaurar el precio', 'error');
         }
+    } catch (e) {
+        setPricingStatus('No se pudo restaurar el precio', 'error');
     }
     renderPricingFields();
 }

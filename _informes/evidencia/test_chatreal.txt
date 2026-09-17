@@ -1,0 +1,7 @@
+PASS  mensaje: chargeClient ok
+PASS  mensaje: A=610 (cobrado UNA vez, no 2)
+PASS  mensaje: B=390
+PASS  mensaje: reintento No-OP (A sigue 610)
+PASS  propina: A=560 B=440
+
+=== E2E CHAT REAL: 5 pass, 0 fail ===

@@ -1,29 +1,28 @@
 /**
- * DESEO — Operaciones de dinero atómicas e idempotentes (Firebase RTDB).
+ * DESEO — Operaciones de dinero AUTORITATIVAS EN SERVIDOR (Supabase).
  * --------------------------------------------------------------------
- * PROBLEMA QUE RESUELVE:
- *  - El código anterior hacía read-then-write sobre `users/{id}/balance`
- *    (`parseInt(snap) + amount` → `set()`), lo que permite doble gasto por
- *    condiciones de carrera y por doble clic/pestañas.
- *  - No había reserva de fondos en retiros ni idempotencia por operación.
+ * MIGRACIÓN (anti-hack):
+ *  - ANTES: read-then-write / transaction() sobre Firebase RTDB desde el CLIENTE.
+ *    Eso endurecía la atomicidad pero la AUTORIDAD seguía en el navegador: un
+ *    atacante con la consola podía escribir `users/{id}/balance` directamente.
+ *  - AHORA: el dinero vive en Supabase (Postgres). El cliente NO puede escribir
+ *    saldos ni ledger (RLS sin policies de escritura). Solo puede INVOCAR RPC
+ *    `SECURITY DEFINER` que validan identidad (Clerk JWT → auth.uid()) y mueven
+ *    el saldo de forma atómica e idempotente (UNIQUE(op_id) a nivel de motor).
  *
- * SOLUCIÓN:
- *  - Usa `ref.transaction()` de Firebase RTDB (atómico, server-side): si el
- *    saldo cambió entre lectura y escritura, Firebase reintenta.
- *  - Idempotencia: cada operación lleva un `opId` único; antes de aplicar se
- *    registra en `ledger/{opId}`. Si ya existe, no se vuelve a aplicar.
+ * SEGURIDAD:
+ *  - Toda operación se ejecuta como el usuario autenticado (auth.uid()).
+ *  - `credit()` a OTRO usuario se resuelve con rpc_transfer (el pagador debe ser
+ *    el autenticado). Un usuario NO puede regalar saldo ni darse saldo a sí mismo.
+ *  - Idempotencia garantizada por el motor (no por la app).
  *
- * NOTA DE SEGURIDAD (importante):
- *  - Esto endurece la ATOMICIDAD, pero la AUTORIDAD sigue en el cliente mientras
- *    el RTDB sea público. La defensa real es:
- *      (1) Firebase Security Rules que impidan escribir `balance` directamente, y
- *      (2) mover estas operaciones a Cloud Functions con Admin SDK.
- *  - Este módulo está pensado para funcionar igual hoy (compat) y para ser el
- *    punto único a migrar a backend mañana.
+ * COMPATIBILIDAD:
+ *  - Se mantiene la MISMA API pública: DeseoMoney.charge/credit/transfer/reserve.
+ *    El primer argumento `db` (Firebase) se ignora; se conserva por compatibilidad.
  *
  * Uso:
  *   await DeseoMoney.charge(db, userId, amount, {reason, chatId, opId})
- *   await DeseoMoney.credit(db, userId, amount, {reason, chatId, opId})
+ *   await DeseoMoney.credit(db, otherUserId, amount, {reason, chatId, opId})
  *   await DeseoMoney.reserve(db, userId, amount, {reason, opId})
  */
 (function () {
@@ -39,163 +38,231 @@
         return Number.isFinite(n) ? n : null;
     }
 
-    /**
-     * Marca una operación como aplicada de forma idempotente.
-     * Devuelve true si es la primera vez (debe aplicarse), false si ya existía.
-     */
-    async function claimOp(db, opId, meta) {
-        if (!opId) return true; // sin id → no hay control de idempotencia
-        var ledgerRef = db.ref('ledger/' + opId);
-        // applyLocally=true (default): para un nodo NUEVO el updateFn debe poder
-        // crear el registro aunque el servidor aún no tenga el valor. El ledger es
-        // append-only; si ya existe, la transacción aborta (idempotencia).
-        var result = await ledgerRef.transaction(function (current) {
-            if (current) return; // ya existe: abortar la transacción (no aplicar)
-            return Object.assign({ appliedAt: new Date().toISOString() }, meta || {});
-        });
-        return result.committed;
+    // ---------------------------------------------------------------------
+    // Cliente Supabase (esperado global desde clerk-supabase.js)
+    // ---------------------------------------------------------------------
+    async function getClient() {
+        if (window.DeseoAuth && window.DeseoAuth.waitForSupabase) {
+            try { const c = await window.DeseoAuth.waitForSupabase; if (c) return c; } catch (_) {}
+        }
+        if (window.DeseoSupabase) return window.DeseoSupabase;
+        if (window.DeseoAuth && window.DeseoAuth.getSupabase) return window.DeseoAuth.getSupabase();
+        return null;
     }
 
-    async function releaseOp(db, opId) {
-        if (!opId) return;
-        try { await db.ref('ledger/' + opId).remove(); } catch (_) { /* noop */ }
+    async function callRpc(name, params) {
+        var sb = await getClient();
+        if (!sb) throw new Error('Supabase no disponible');
+        var res = await sb.rpc(name, params);
+        if (res.error) {
+            // Errores de negocio esperados → devolver como resultado controlado.
+            var msg = (res.error.message || '').toLowerCase();
+            if (msg.indexOf('insufficient_funds') !== -1 || msg.indexOf('balances_non_negative') !== -1 || msg.indexOf('check constraint') !== -1) return { ok: false, reason: 'insufficient_funds', error: res.error };
+            if (msg.indexOf('not_authenticated') !== -1) return { ok: false, reason: 'not_authenticated', error: res.error };
+            if (msg.indexOf('forbidden') !== -1) return { ok: false, reason: 'forbidden', error: res.error };
+            throw new Error(res.error.message || 'rpc_error');
+        }
+        return res.data; // jsonb {ok, balance, ...}
     }
 
-    // Cache de nodos ya "activados" con listener persistente (para que
-    // transaction() siempre trabaje sobre el valor del servidor en compat SDK v10).
-    var activatedNodes = {};
-
-    /**
-     * Activa (sincroniza) un nodo del RTDB adjuntando un listener persistente.
-     * En el SDK compat v10, `transaction()` sobre un nodo que no está "activo"
-     * parte de la caché local vacía (ve null) y aborta silenciosamente. Mantener
-     * un listener 'value' garantiza que la caché refleje el servidor.
-     */
-    function activateNode(ref) {
-        return new Promise(function (resolve) {
-            var key = ref.toString();
-            if (activatedNodes[key]) { resolve(); return; }
-            var done = false;
-            var finish = function () { if (!done) { done = true; activatedNodes[key] = true; resolve(); } };
-            try {
-                ref.on('value', function () { finish(); }, function () { finish(); });
-            } catch (_) { finish(); return; }
-            // Respaldo: si no llega ningún valor en 2.5s, continuar igualmente.
-            setTimeout(finish, 2500);
-        });
-    }
-
-    /**
-     * Aplica un delta atómico al balance, sin permitir saldo negativo.
-     * delta: número positivo o negativo.
-     * requireSufficient: si true, aborta cuando el saldo quedaría < 0.
-     */
-    async function applyDelta(db, userId, delta, options) {
-        options = options || {};
-        var balanceRef = db.ref('users/' + userId + '/balance');
-
-        // Sincronizar el nodo (listener persistente) para que la transacción vea el valor real.
-        await activateNode(balanceRef);
-
-        var updateFn = function (current) {
-            var cur = toInt(current);
-            if (cur === null) cur = 0;
-            var next = cur + delta;
-            if (options.requireSufficient && next < 0) {
-                return; // abortar: fondos insuficientes
-            }
-            return next;
-        };
-
-        var result = await balanceRef.transaction(updateFn);
-        return { committed: result.committed, balance: toInt(result.snapshot.val()) };
-    }
-
-    async function writeLedgerEntry(db, userId, entry) {
+    // Devuelve el id del usuario autenticado (sub del JWT de Clerk/Supabase).
+    async function resolveAuthUserId() {
+        // 1) Sesión de Clerk (producción).
         try {
-            await db.ref('users/' + userId + '/microtransactions/' + entry.id).set(entry);
+            if (window.DeseoAuth && window.DeseoAuth.getUserId) {
+                var id = await window.DeseoAuth.getUserId();
+                if (id) return String(id);
+            }
         } catch (_) { /* noop */ }
+        // 2) Decodificar el JWT del cliente Supabase (sub).
+        try {
+            var sb = await getClient();
+            if (sb && sb.auth && sb.auth.getSession) {
+                var s = await sb.auth.getSession();
+                var tok = s && s.data && s.data.session && s.data.session.access_token;
+                if (tok) {
+                    var p = JSON.parse(atob(tok.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+                    if (p && p.sub) return String(p.sub);
+                }
+            }
+        } catch (_) { /* noop */ }
+        return null;
     }
 
     var DeseoMoney = {
         genOpId: genOpId,
 
-        /** Cobra al usuario de forma atómica. No deja saldo negativo. */
+        /**
+         * Cobra al usuario autenticado de forma atómica e idempotente.
+         * El `userId` debe ser el propio (el servidor usa auth.uid()).
+         */
         async charge(db, userId, amount, options) {
             options = options || {};
             var amt = toInt(amount);
             if (amt === null || amt <= 0) throw new Error('Monto inválido');
             var opId = options.opId || genOpId('charge');
 
-            if (!(await claimOp(db, opId, { kind: 'charge', userId: userId, amount: amt }))) {
-                return { ok: true, idempotent: true, opId: opId };
-            }
-
-            var res = await applyDelta(db, userId, -amt, { requireSufficient: true });
-            if (!res.committed) {
-                await releaseOp(db, opId);
-                return { ok: false, reason: 'insufficient_funds', opId: opId };
-            }
-
-            await writeLedgerEntry(db, userId, {
-                id: opId, direction: 'out', reason: options.reason || 'charge',
-                amount: amt, to: options.to || null, chatId: options.chatId || null,
-                timestamp: new Date().toISOString()
+            var r = await callRpc('rpc_charge', {
+                p_amount: amt,
+                p_reason: options.reason || 'charge',
+                p_chat_id: options.chatId || null,
+                p_op_id: opId
             });
-            return { ok: true, balance: res.balance, opId: opId };
+            if (r && r.ok === false) return r; // insufficient_funds, etc.
+            return { ok: true, idempotent: !!(r && r.idempotent), balance: r && r.balance, opId: opId };
         },
 
-        /** Acredita al usuario de forma atómica. */
+        /**
+         * Acredita a un usuario. Si es OTRO usuario, se hace como transferencia
+         * del autenticado → destino (rpc_transfer). Si es uno mismo, rpc_credit.
+         */
         async credit(db, userId, amount, options) {
             options = options || {};
             var amt = toInt(amount);
             if (amt === null || amt <= 0) throw new Error('Monto inválido');
             var opId = options.opId || genOpId('credit');
 
-            if (!(await claimOp(db, opId, { kind: 'credit', userId: userId, amount: amt }))) {
-                return { ok: true, idempotent: true, opId: opId };
-            }
+            // Identidad del pagador autenticado: del cliente Supabase (auth.uid()),
+            // no de estructuras locales que el cliente pudiera falsear.
+            var me = await resolveAuthUserId();
+            if (!me && options.from) me = options.from;
 
-            var res = await applyDelta(db, userId, amt, { requireSufficient: false });
-            if (!res.committed) {
-                await releaseOp(db, opId);
-                return { ok: false, reason: 'not_committed', opId: opId };
+            if (userId && me && userId !== me) {
+                // Acreditar a otro = transferir del autenticado al destino.
+                // Se normaliza el opId quitando el sufijo _in que añade el chat.
+                var baseOp = String(opId).replace(/_in$/, '');
+                return this.transfer(db, me, userId, amt, {
+                    reason: options.reason, chatId: options.chatId, opId: baseOp
+                });
             }
-
-            await writeLedgerEntry(db, userId, {
-                id: opId, direction: 'in', reason: options.reason || 'credit',
-                amount: amt, from: options.from || null, chatId: options.chatId || null,
-                timestamp: new Date().toISOString()
+            // Acreditar a uno mismo (p.ej. devolución/reembolso). rpc_credit exige
+            // service_role; si no está disponible, no acreditamos (evita auto-hack).
+            var r = await callRpc('rpc_credit', {
+                p_amount: amt,
+                p_reason: options.reason || 'credit',
+                p_chat_id: options.chatId || null,
+                p_op_id: opId
+            }).catch(function (e) {
+                console.warn('[DeseoMoney] credit a sí mismo no permitido:', e && e.message);
+                return { ok: false, reason: 'credit_forbidden' };
             });
-            return { ok: true, balance: res.balance, opId: opId };
+            if (r && r.ok === false) return r;
+            return { ok: true, idempotent: !!(r && r.idempotent), balance: r && r.balance, opId: opId };
         },
 
-        /** Transferencia atómica cliente→proveedor en una sola operación idempotente. */
+        /** Transferencia atómica (autenticado → toUserId) en el servidor. */
         async transfer(db, fromUserId, toUserId, amount, options) {
             options = options || {};
+            var amt = toInt(amount);
+            if (amt === null || amt <= 0) throw new Error('Monto inválido');
+            if (!toUserId) throw new Error('Destino inválido');
             var opId = options.opId || genOpId('transfer');
-            var charge = await this.charge(db, fromUserId, amount, {
-                reason: options.reason, chatId: options.chatId, to: toUserId, opId: opId + '_out'
+
+            var r = await callRpc('rpc_transfer', {
+                p_to_user: toUserId,
+                p_amount: amt,
+                p_reason: options.reason || 'transfer',
+                p_chat_id: options.chatId || null,
+                p_op_id: opId
             });
-            if (!charge.ok) return charge;
-            if (charge.idempotent) {
-                // El cobro ya se aplicó antes; verificar que el crédito también.
-                await this.credit(db, toUserId, amount, {
-                    reason: options.reason, chatId: options.chatId, from: fromUserId, opId: opId + '_in'
-                });
-                return { ok: true, idempotent: true, opId: opId };
-            }
-            await this.credit(db, toUserId, amount, {
-                reason: options.reason, chatId: options.chatId, from: fromUserId, opId: opId + '_in'
-            });
-            return { ok: true, opId: opId };
+            if (r && r.ok === false) return r;
+            return { ok: true, idempotent: !!(r && r.idempotent), balance: r && r.balance, opId: opId };
         },
 
-        /** Reserva fondos (retiro): descuenta ya, de forma atómica y sin saldo negativo. */
+        /**
+         * ADMIN: acredita saldo a un usuario objetivo (aprobación de depósito).
+         * El servidor valida que el llamador sea admin (tabla public.admins).
+         * Idempotente por op_id. Si no es admin → {ok:false, reason:'forbidden'}.
+         */
+        async adminCredit(db, userId, amount, options) {
+            options = options || {};
+            var amt = toInt(amount);
+            if (amt === null || amt <= 0) throw new Error('Monto inválido');
+            if (!userId) throw new Error('Destino inválido');
+            var opId = options.opId || genOpId('admin_credit');
+            var r = await callRpc('rpc_admin_credit', {
+                p_user: userId, p_amount: amt,
+                p_reason: options.reason || 'admin_deposit', p_op_id: opId
+            });
+            if (r && r.ok === false) return r;
+            return { ok: true, idempotent: !!(r && r.idempotent), balance: r && r.balance, opId: opId };
+        },
+
+        /**
+         * ADMIN: debita saldo a un usuario objetivo (aprobación de retiro).
+         * Valida admin en el servidor. Idempotente por op_id.
+         */
+        async adminCharge(db, userId, amount, options) {
+            options = options || {};
+            var amt = toInt(amount);
+            if (amt === null || amt <= 0) throw new Error('Monto inválido');
+            if (!userId) throw new Error('Destino inválido');
+            var opId = options.opId || genOpId('admin_charge');
+            var r = await callRpc('rpc_admin_charge', {
+                p_user: userId, p_amount: amt,
+                p_reason: options.reason || 'admin_withdrawal', p_op_id: opId
+            });
+            if (r && r.ok === false) return r;
+            return { ok: true, idempotent: !!(r && r.idempotent), balance: r && r.balance, opId: opId };
+        },
+
+        /** Reserva fondos (retiro): cobra de forma atómica, sin saldo negativo. */
         async reserve(db, userId, amount, options) {
             options = options || {};
             var opId = options.opId || genOpId('reserve');
-            return this.charge(db, userId, amount, Object.assign({}, options, { opId: opId, reason: options.reason || 'withdrawal_reserve' }));
+            return this.charge(db, userId, amount, Object.assign({}, options, {
+                opId: opId, reason: options.reason || 'withdrawal_reserve'
+            }));
+        },
+
+        /** Escrow (custodia): retiene el monto del pagador hasta liberarlo. */
+        async escrowHold(db, orderId, amount, options) {
+            options = options || {};
+            var amt = toInt(amount);
+            if (amt === null || amt <= 0) throw new Error('Monto inválido');
+            if (!orderId) throw new Error('orderId requerido');
+            var r = await callRpc('rpc_escrow_hold', {
+                p_order_id: orderId, p_amount: amt,
+                p_op_id: options.opId || ('escrow_hold_' + orderId)
+            });
+            if (r && r.ok === false) return r;
+            return { ok: true, idempotent: !!(r && r.idempotent), balance: r && r.balance, escrow: r && r.escrow };
+        },
+
+        /** Libera el escrow al proveedor (idempotente). */
+        async escrowRelease(db, orderId, toUser, options) {
+            options = options || {};
+            if (!orderId || !toUser) throw new Error('orderId/toUser requeridos');
+            var r = await callRpc('rpc_escrow_release', {
+                p_order_id: orderId, p_to_user: toUser,
+                p_op_id: options.opId || ('release_' + orderId)
+            });
+            if (r && r.ok === false) return r;
+            return { ok: true, idempotent: !!(r && r.idempotent), released: r && r.released };
+        },
+
+        /** Devuelve el escrow al cliente original (disputa/cancelación). */
+        async escrowRefund(db, orderId, options) {
+            options = options || {};
+            if (!orderId) throw new Error('orderId requerido');
+            var r = await callRpc('rpc_escrow_refund', {
+                p_order_id: orderId, p_op_id: options.opId || ('refund_' + orderId)
+            });
+            if (r && r.ok === false) return r;
+            return { ok: true, idempotent: !!(r && r.idempotent), refunded: r && r.refunded };
+        },
+
+        /**
+         * Lectura del saldo propio (RLS: solo el propio). Devuelve número o null.
+         */
+        async getBalance(db, userId) {
+            try {
+                var sb = await getClient();
+                if (!sb) return null;
+                var res = await sb.from('balances').select('balance').eq('user_id', userId).maybeSingle();
+                if (res.error) return null;
+                return res.data ? toInt(res.data.balance) : 0;
+            } catch (_) { return null; }
         }
     };
 

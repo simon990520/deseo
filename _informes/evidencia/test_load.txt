@@ -1,0 +1,22 @@
+[chat-client.html] {"hasConfig":true,"hasSbCfg":true,"hasDeseoAuth":true,"hasDeseoMoney":true,"moneyApi":["genOpId","charge","credit","transfer","reserve","escrowHold","escrowRelease","escrowRefund","getBalance"],"hasSbJs":false}
+  PASS  chat-client.html: DeseoAuth presente
+  PASS  chat-client.html: CONFIG.SUPABASE presente
+  PASS  chat-client.html: DeseoMoney presente
+[chat-provider.html] {"hasConfig":true,"hasSbCfg":true,"hasDeseoAuth":true,"hasDeseoMoney":true,"moneyApi":["genOpId","charge","credit","transfer","reserve","escrowHold","escrowRelease","escrowRefund","getBalance"],"hasSbJs":false}
+  PASS  chat-provider.html: DeseoAuth presente
+  PASS  chat-provider.html: CONFIG.SUPABASE presente
+  PASS  chat-provider.html: DeseoMoney presente
+[settings.html] {"hasConfig":true,"hasSbCfg":true,"hasDeseoAuth":true,"hasDeseoMoney":false,"moneyApi":null,"hasSbJs":false}
+  PASS  settings.html: DeseoAuth presente
+  PASS  settings.html: CONFIG.SUPABASE presente
+  FAIL  settings.html: DeseoMoney presente -> {"hasConfig":true,"hasSbCfg":true,"hasDeseoAuth":true,"hasDeseoMoney":false,"moneyApi":null,"hasSbJs":false}
+[chats.html] {"hasConfig":true,"hasSbCfg":true,"hasDeseoAuth":true,"hasDeseoMoney":true,"moneyApi":["genOpId","charge","credit","transfer","reserve","escrowHold","escrowRelease","escrowRefund","getBalance"],"hasSbJs":true}
+  PASS  chats.html: DeseoAuth presente
+  PASS  chats.html: CONFIG.SUPABASE presente
+  PASS  chats.html: DeseoMoney presente
+[wallet.html] {"hasConfig":true,"hasSbCfg":true,"hasDeseoAuth":true,"hasDeseoMoney":true,"moneyApi":["genOpId","charge","credit","transfer","reserve","escrowHold","escrowRelease","escrowRefund","getBalance"],"hasSbJs":true}
+  PASS  wallet.html: DeseoAuth presente
+  PASS  wallet.html: CONFIG.SUPABASE presente
+  PASS  wallet.html: DeseoMoney presente
+
+=== E2E CARGA: 14 pass, 1 fail ===

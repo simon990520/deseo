@@ -599,21 +599,10 @@ class ChatClient {
         try {
             // SEGURIDAD (anti-manipulación): el precio del mensaje NO se toma del
             // front ni de un valor global. Es el precio que el DUEÑO del perfil
-            // destino definió en users/{otherUserId}/profile/messagePrice y se lee
-            // DIRECTO de Firebase en este momento (fuente de verdad en servidor).
-            // Si el dueño no definió precio, se cae al valor por defecto.
-            let CLIENT_COST = 390; // fallback si el perfil no define precio
-            try {
-                const priceSnap = await this.database
-                    .ref(`users/${this.otherUserId}/profile/messagePrice`)
-                    .once('value');
-                const remotePrice = priceSnap.val();
-                if (typeof remotePrice === 'number' && remotePrice >= 0) {
-                    CLIENT_COST = remotePrice;
-                }
-            } catch (priceErr) {
-                console.warn('⚠️ No se pudo leer el precio del destinatario; usando por defecto:', priceErr);
-            }
+            // destino definió (FUENTE AUTORITATIVA: Supabase message_prices).
+            // Nota: aunque el cliente leyera un precio manipulado, el servidor
+            // (rpc_send_message_charge) cobra SIEMPRE el precio real del dueño.
+            const CLIENT_COST = await this.getProviderPrice();
             // El 100% del precio va al dueño del perfil. La comisión de plataforma
             // (50%) se aplica más adelante, en el retiro (no aquí).
             const PROVIDER_CREDIT = CLIENT_COST;
@@ -938,8 +927,64 @@ class ChatClient {
         }
     }
 
-    // Cobro contra saldo del cliente — ATÓMICO e idempotente vía DeseoMoney.
+    // Precio por mensaje del DUEÑO del perfil destino.
+    // Fuente AUTORITATIVA: Supabase (tabla message_prices). Fallback: Firebase.
+    // El servidor cobra igualmente el precio real, así que manipular esto solo
+    // afecta a lo que el cliente "cree" pagar — nunca al cobro real.
+    async getProviderPrice() {
+        const DEFAULT = 390;
+        // 1) Supabase (fuente de verdad).
+        try {
+            let sb = null;
+            if (window.DeseoAuth && window.DeseoAuth.waitForSupabase) sb = await window.DeseoAuth.waitForSupabase;
+            if (!sb && window.DeseoSupabase) sb = window.DeseoSupabase;
+            if (sb && this.otherUserId) {
+                const res = await sb.from('message_prices')
+                    .select('message_price').eq('user_id', this.otherUserId).maybeSingle();
+                if (!res.error && res.data && Number.isFinite(res.data.message_price)) {
+                    return parseInt(res.data.message_price, 10);
+                }
+            }
+        } catch (_) { /* noop */ }
+        // 2) Fallback Firebase (mientras se migra).
+        try {
+            if (this.otherUserId && this.database) {
+                const snap = await this.database.ref(`users/${this.otherUserId}/profile/messagePrice`).once('value');
+                const p = snap.val();
+                if (typeof p === 'number' && p >= 0) return p;
+            }
+        } catch (_) { /* noop */ }
+        return DEFAULT;
+    }
+
+    // Cobro al cliente + crédito al proveedor en UNA sola operación atómica
+    // (Supabase rpc_transfer). Antes se hacía charge() y luego credit() por
+    // separado; con el modelo autoritativo eso causaba DOBLE DÉBITO al cliente
+    // (charge debita A, credit→transfer vuelve a debitar A). Ahora el cargo ya
+    // deja el dinero en el proveedor, así que creditProvider se vuelve no-op.
     async chargeClient(amount, reason, opId) {
+        return this._chargeOrTransfer(amount, reason, opId, false);
+    }
+
+    // Cobro tipo ESCROW (encuentros): retiene el dinero en custodia hasta liberarlo.
+    async chargeClientEscrow(amount, reason, orderId) {
+        try {
+            const amt = parseInt(amount, 10);
+            if (!Number.isFinite(amt) || amt <= 0) return false;
+            if (!window.DeseoMoney || !window.DeseoMoney.escrowHold) {
+                console.error('❌ DeseoMoney.escrowHold no disponible; abortando.');
+                return false;
+            }
+            const res = await window.DeseoMoney.escrowHold(this.database, orderId, amt, { reason: reason });
+            if (!res.ok) { console.warn('⚠️ Escrow no aplicado:', res.reason); return false; }
+            return true;
+        } catch (e) {
+            console.error('❌ Error reteniendo escrow:', e);
+            return false;
+        }
+    }
+
+    async _chargeOrTransfer(amount, reason, opId, escrow) {
         try {
             const amt = parseInt(amount, 10);
             if (!Number.isFinite(amt) || amt <= 0) return false;
@@ -947,11 +992,24 @@ class ChatClient {
                 console.error('❌ DeseoMoney no disponible; abortando cobro por seguridad.');
                 return false;
             }
+            const baseOp = String(opId || '').replace(/_(out|in)$/, '') || undefined;
+            // Si hay destinatario, mover dinero al proveedor (cobro + crédito),
+            // salvo en escrow (que solo retiene en custodia).
+            if (this.otherUserId && !escrow) {
+                const res = await window.DeseoMoney.transfer(
+                    this.database, this.currentUser.id, this.otherUserId, amt,
+                    { reason: reason, chatId: this.chatId, opId: baseOp }
+                );
+                if (!res.ok) {
+                    console.warn('⚠️ Transferencia no aplicada:', res.reason);
+                    return false;
+                }
+                this._providerCreditedFor = baseOp || null;
+                return true;
+            }
+            // Sin destinatario: solo cobrar al cliente.
             const res = await window.DeseoMoney.charge(this.database, this.currentUser.id, amt, {
-                reason: reason,
-                to: this.otherUserId,
-                chatId: this.chatId,
-                opId: opId
+                reason: reason, to: this.otherUserId, chatId: this.chatId, opId: opId
             });
             if (!res.ok) {
                 console.warn('⚠️ Cobro no aplicado:', res.reason);
@@ -964,21 +1022,27 @@ class ChatClient {
         }
     }
 
+    // Crédito al proveedor. NO-OP si el dinero ya se movió en chargeClient
+    // (evita doble débito). Solo acredita de verdad cuando se le llama aislado
+    // (p.ej. liberar escrow de un encuentro ya cobrado).
     async creditProvider(amount, reason, opId) {
         try {
             if (!this.otherUserId) return false;
             const amt = parseInt(amount, 10);
             if (!Number.isFinite(amt) || amt <= 0) return true; // nada que acreditar = no es error
+            const baseOp = String(opId || '').replace(/_(out|in)$/, '');
+            // Si el cargo ya transfirió a este proveedor con el mismo opId base, no repetir.
+            if (this._providerCreditedFor && this._providerCreditedFor === baseOp) {
+                return true;
+            }
             if (!window.DeseoMoney) {
                 console.error('❌ DeseoMoney no disponible; abortando crédito por seguridad.');
                 return false;
             }
-            const res = await window.DeseoMoney.credit(this.database, this.otherUserId, amt, {
-                reason: reason,
-                from: this.currentUser.id,
-                chatId: this.chatId,
-                opId: opId
-            });
+            const res = await window.DeseoMoney.transfer(
+                this.database, this.currentUser.id, this.otherUserId, amt,
+                { reason: reason, chatId: this.chatId, opId: baseOp }
+            );
             if (res && res.ok === false) {
                 console.warn('⚠️ Crédito no aplicado:', res.reason);
                 return false;
@@ -1072,29 +1136,52 @@ class ChatClient {
 
     showNotification(message, type = 'info') {
         console.log(`🔔 [${type.toUpperCase()}] ${message}`);
-        // Crear notificación visual simple
-        const notification = document.createElement('div');
-        notification.style.cssText = `
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            background: ${type === 'success' ? '#4CAF50' : type === 'error' ? '#f44336' : '#2196F3'};
-            color: white;
-            padding: 12px 20px;
-            border-radius: 8px;
-            z-index: 10000;
-            font-size: 14px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+
+        // Contenedor de toasts (se crea una sola vez y apila las notificaciones)
+        let container = document.getElementById('chatToastContainer');
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'chatToastContainer';
+            container.className = 'chat-toast-container';
+            document.body.appendChild(container);
+        }
+
+        const icons = {
+            success: 'fa-check',
+            error: 'fa-times',
+            warning: 'fa-exclamation',
+            info: 'fa-info'
+        };
+        const titles = {
+            success: 'Listo',
+            error: 'Error',
+            warning: 'Atención',
+            info: 'Información'
+        };
+        const safeType = icons[type] ? type : 'info';
+
+        const toast = document.createElement('div');
+        toast.className = `chat-toast ${safeType}`;
+        toast.innerHTML = `
+            <div class="chat-toast-icon"><i class="fas ${icons[safeType]}"></i></div>
+            <div class="chat-toast-body">
+                <div class="chat-toast-title">${titles[safeType]}</div>
+                <div class="chat-toast-msg"></div>
+            </div>
+            <button class="chat-toast-close" aria-label="Cerrar"><i class="fas fa-times"></i></button>
         `;
-        notification.textContent = message;
-        document.body.appendChild(notification);
-        
-        // Remover después de 3 segundos
-        setTimeout(() => {
-            if (notification.parentNode) {
-                notification.parentNode.removeChild(notification);
-            }
-        }, 3000);
+        // Insertar el mensaje como texto (evita inyección de HTML)
+        toast.querySelector('.chat-toast-msg').textContent = message;
+
+        const remove = () => {
+            if (!toast.parentNode) return;
+            toast.classList.add('hiding');
+            setTimeout(() => { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 250);
+        };
+        toast.querySelector('.chat-toast-close').addEventListener('click', remove);
+
+        container.appendChild(toast);
+        setTimeout(remove, 4000);
     }
 
 
@@ -1474,8 +1561,8 @@ class ChatClient {
                     const orderRef = this.database.ref(`encounterOrders/${orderId}`);
                     await orderRef.set(orderData);
 
-                    // 2) Cobrar al cliente (escrow atómico e idempotente).
-                    const canCharge = await this.chargeClient(offer.price, 'encounter_escrow', escrowOpId);
+                    // 2) Retener el monto en ESCROW (custodia server-authoritative).
+                    const canCharge = await this.chargeClientEscrow(offer.price, 'encounter_escrow', orderId);
                     if (!canCharge) {
                         // Compensación: eliminar la orden reservada.
                         try { await orderRef.remove(); } catch (_) {}
@@ -1540,7 +1627,7 @@ class ChatClient {
             const existing = document.getElementById('completeEncounterBtn');
             if (existing) existing.remove();
 
-            // Mostrar botón solo si el proveedor ya confirmó hace < 5 minutos
+            // Mostrar barra solo si el proveedor ya confirmó hace < 5 minutos
             const ordersRef = this.database.ref('encounterOrders');
             const snap = await ordersRef.orderByChild('chatId').equalTo(this.chatId).once('value');
             const all = snap.val() || {};
@@ -1552,50 +1639,101 @@ class ChatClient {
             const start = new Date(order.providerConfirmedAt).getTime();
             const deadline = start + 5 * 60 * 1000;
             const now = Date.now();
+            const expired = now >= deadline;
 
-            const btn = document.createElement('button');
-            btn.id = 'completeEncounterBtn';
-            btn.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:9999;padding:10px 14px;border-radius:8px;border:none;background:#10b981;color:#fff;cursor:pointer;font-weight:600;box-shadow:0 6px 16px rgba(0,0,0,.25)';
-
-            if (now < deadline) {
-                btn.textContent = 'Confirmar encuentro finalizado';
-                btn.onclick = () => this.clientConfirmOrder(order.id);
-            } else {
-                // Después de 5 minutos, el cliente puede disputar si hay problema real
-                btn.textContent = 'Reportar problema';
-                btn.style.background = '#ef4444';
-                btn.onclick = () => this.reportEncounterProblem(order.id);
-            }
-            document.body.appendChild(btn);
+            // Barra de acción integrada al diseño del chat (no un botón suelto)
+            const bar = document.createElement('div');
+            bar.id = 'completeEncounterBtn';
+            bar.className = 'encounter-action-bar' + (expired ? ' danger' : '');
+            bar.innerHTML = `
+                <div class="encounter-bar-icon"><i class="fas ${expired ? 'fa-triangle-exclamation' : 'fa-handshake'}"></i></div>
+                <div class="encounter-bar-text">
+                    <div class="encounter-bar-title">${expired ? 'Tiempo de confirmación agotado' : 'El proveedor finalizó el encuentro'}</div>
+                    <div class="encounter-bar-sub">${expired ? 'Si hubo un problema, puedes reportarlo.' : 'Confirma que todo salió bien para liberar el pago.'}</div>
+                </div>
+                <button class="encounter-bar-btn" type="button">
+                    ${expired ? 'Reportar problema' : 'Confirmar finalizado'}
+                </button>
+            `;
+            bar.querySelector('.encounter-bar-btn').addEventListener('click', () => {
+                if (expired) {
+                    this.reportEncounterProblem(order.id);
+                } else {
+                    this.openCompleteEncounterDialog(order.id);
+                }
+            });
+            document.body.appendChild(bar);
 
             // Banner con contador
             this.renderCountdownBanner(order);
         } catch (_) {}
     }
 
-    async openCompleteEncounterDialog() {
+    async openCompleteEncounterDialog(orderId) {
         try {
-            // Buscar órdenes en escrow para este chat
-            const ordersRef = this.database.ref('encounterOrders');
-            const snap = await ordersRef.orderByChild('chatId').equalTo(this.chatId).once('value');
-            const all = snap.val() || {};
-            const activeOrders = Object.values(all).filter(o => o.status === 'escrowed' && o.providerConfirmed);
-            if (activeOrders.length === 0) {
-                this.showNotification('No hay órdenes activas para finalizar', 'info');
-                return;
+            let order = null;
+            if (orderId) {
+                const snap = await this.database.ref(`encounterOrders/${orderId}`).once('value');
+                order = snap.val();
+            }
+            if (!order) {
+                // Buscar órdenes en escrow para este chat
+                const ordersRef = this.database.ref('encounterOrders');
+                const snap = await ordersRef.orderByChild('chatId').equalTo(this.chatId).once('value');
+                const all = snap.val() || {};
+                const activeOrders = Object.values(all).filter(o => o.status === 'escrowed' && o.providerConfirmed);
+                if (activeOrders.length === 0) {
+                    this.showNotification('No hay órdenes activas para finalizar', 'info');
+                    return;
+                }
+                order = activeOrders.sort((a,b) => (a.createdAt||'').localeCompare(b.createdAt||''))[activeOrders.length-1];
             }
 
-            // Por simplicidad: si hay una sola orden, operamos sobre esa; si hay varias, tomamos la más reciente
-            const order = activeOrders.sort((a,b) => (a.createdAt||'').localeCompare(b.createdAt||''))[activeOrders.length-1];
+            // Modal de confirmación con diseño propio (reemplaza confirm/prompt nativos)
+            const modal = document.createElement('div');
+            modal.className = 'encounter-confirm-modal';
+            modal.innerHTML = `
+                <div class="encounter-confirm-card">
+                    <div class="encounter-confirm-header">
+                        <div class="encounter-confirm-icon"><i class="fas fa-handshake"></i></div>
+                        <h3>¿Finalizar el encuentro?</h3>
+                        <p>Confirma que el encuentro se realizó correctamente. Al confirmar, el pago en garantía se liberará al proveedor.</p>
+                    </div>
+                    <div class="encounter-confirm-body" style="display:none;">
+                        <textarea class="encounter-dispute-reason" placeholder="Describe brevemente el problema..."></textarea>
+                    </div>
+                    <div class="encounter-confirm-footer">
+                        <button class="confirm-ok-btn" type="button"><i class="fas fa-check"></i> Sí, finalizar encuentro</button>
+                        <button class="confirm-dispute-btn" type="button"><i class="fas fa-flag"></i> Reportar un problema</button>
+                        <button class="confirm-cancel-btn" type="button">Cancelar</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
 
-            // Confirmación de finalización o disputa
-            const proceed = window.confirm('¿Confirmas que el encuentro ha finalizado correctamente? (Aceptar para finalizar, Cancelar para abrir disputa)');
-            if (proceed) {
+            const close = () => modal.remove();
+            const body = modal.querySelector('.encounter-confirm-body');
+            const reasonInput = modal.querySelector('.encounter-dispute-reason');
+
+            modal.querySelector('.confirm-ok-btn').addEventListener('click', async () => {
+                close();
                 await this.clientConfirmOrder(order.id);
-            } else {
-                const reason = prompt('Describe brevemente el problema para disputa (opcional):', 'No se realizó el encuentro / Incumplimiento');
-                await this.raiseDispute(order.id, reason || 'Sin detalle');
-            }
+            });
+
+            modal.querySelector('.confirm-dispute-btn').addEventListener('click', async () => {
+                // Primer clic: revela el campo de motivo. Segundo clic: envía la disputa.
+                if (body.style.display === 'none') {
+                    body.style.display = 'block';
+                    reasonInput.focus();
+                    return;
+                }
+                const reason = (reasonInput.value || '').trim() || 'No se realizó el encuentro / Incumplimiento';
+                close();
+                await this.raiseDispute(order.id, reason);
+            });
+
+            modal.querySelector('.confirm-cancel-btn').addEventListener('click', close);
+            modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
         } catch (e) {
             console.error('❌ Error abriendo finalización:', e);
             this.showError('No se pudo abrir la finalización');
@@ -1644,10 +1782,23 @@ class ChatClient {
     }
 
     async releaseEscrow(order) {
-        // Acreditar al proveedor el monto en garantía, de forma atómica e idempotente
-        // (opId basado en el escrow: evita doble liberación si se reintenta).
+        // Liberar la custodia al proveedor (idempotente por orderId).
         const opId = `release_${order.escrowOpId || order.id}`;
-        const ok = await this.creditProvider(order.escrowAmount, 'encounter_release', opId);
+        let ok = false;
+        try {
+            if (window.DeseoMoney && window.DeseoMoney.escrowRelease) {
+                const res = await window.DeseoMoney.escrowRelease(
+                    this.database, order.id, this.otherUserId || order.providerId, { opId: opId }
+                );
+                ok = !!res.ok;
+            } else {
+                // Fallback: transferencia directa del cliente al proveedor.
+                ok = await this.creditProvider(order.escrowAmount, 'encounter_release', opId);
+            }
+        } catch (e) {
+            console.error('❌ Error liberando escrow:', e);
+            ok = false;
+        }
         if (!ok) {
             // El escrow ya quedó 'completed' atómicamente; si el crédito falla,
             // se marca para revisión admin en vez de perder el rastro.
@@ -1682,49 +1833,52 @@ class ChatClient {
         const modal = document.createElement('div');
         modal.className = 'rating-modal';
         modal.innerHTML = `
-            <div class="modal-overlay">
-                <div class="modal-content">
-                    <div class="modal-header">
-                        <h3>Calificar ${userType}</h3>
-                        <button class="close-btn" onclick="this.closest('.rating-modal').remove()">
-                            <i class="fas fa-times"></i>
-                        </button>
+            <div class="rating-card">
+                <div class="rating-card-header">
+                    <h3><i class="fas fa-star"></i> Calificar ${userType}</h3>
+                    <button class="close-btn" type="button" aria-label="Cerrar">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="rating-card-body">
+                    <p>¿Cómo fue tu experiencia? Califica del 1 al 5 (opcional).</p>
+                    <div class="rating-stars">
+                        <span class="star" data-rating="1">★</span>
+                        <span class="star" data-rating="2">★</span>
+                        <span class="star" data-rating="3">★</span>
+                        <span class="star" data-rating="4">★</span>
+                        <span class="star" data-rating="5">★</span>
                     </div>
-                    <div class="modal-body">
-                        <p>Califica del 1 al 5 (opcional):</p>
-                        <div class="rating-stars">
-                            <span class="star" data-rating="1">★</span>
-                            <span class="star" data-rating="2">★</span>
-                            <span class="star" data-rating="3">★</span>
-                            <span class="star" data-rating="4">★</span>
-                            <span class="star" data-rating="5">★</span>
-                        </div>
-                        <textarea placeholder="Comentario (opcional)" class="rating-comment"></textarea>
-                        <div class="modal-actions">
-                            <button class="btn btn-secondary" onclick="this.closest('.rating-modal').remove()">Omitir</button>
-                            <button class="btn btn-primary" onclick="window.submitRating()">Enviar</button>
-                        </div>
-                    </div>
+                    <textarea placeholder="Comentario (opcional)" class="rating-comment"></textarea>
+                </div>
+                <div class="rating-card-footer">
+                    <button class="rating-skip-btn" type="button">Omitir</button>
+                    <button class="rating-submit-btn" type="button">Enviar</button>
                 </div>
             </div>
         `;
-        
+
         document.body.appendChild(modal);
-        
-        // Configurar estrellas
+
+        const close = () => modal.remove();
+
+        // Configurar estrellas (usando clase .active en vez de estilos inline)
         const stars = modal.querySelectorAll('.star');
         let selectedRating = 0;
         stars.forEach((star, index) => {
             star.addEventListener('click', () => {
                 selectedRating = index + 1;
                 stars.forEach((s, i) => {
-                    s.style.color = i < selectedRating ? '#ffd700' : '#ccc';
+                    s.classList.toggle('active', i < selectedRating);
                 });
             });
         });
-        
-        // Función global para enviar
-        window.submitRating = async () => {
+
+        modal.querySelector('.close-btn').addEventListener('click', close);
+        modal.querySelector('.rating-skip-btn').addEventListener('click', close);
+        modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+
+        modal.querySelector('.rating-submit-btn').addEventListener('click', async () => {
             const comment = modal.querySelector('.rating-comment').value;
             if (selectedRating > 0) {
                 const ratingId = `rating_${Date.now()}`;
@@ -1739,9 +1893,8 @@ class ChatClient {
                 });
                 this.showNotification('Calificación enviada', 'success');
             }
-            modal.remove();
-            delete window.submitRating;
-        };
+            close();
+        });
     }
 
     async raiseDispute(orderId, reason) {
@@ -1801,23 +1954,45 @@ class ChatClient {
             if (!banner) {
                 banner = document.createElement('div');
                 banner.id = 'orderCountdownBanner';
-                banner.style.cssText = 'position:fixed;left:16px;right:16px;bottom:72px;background:#0f172a;color:#fff;padding:10px 14px;border-radius:8px;z-index:9998;box-shadow:0 6px 16px rgba(0,0,0,.25);font-size:14px';
+                banner.className = 'order-countdown-banner';
+                banner.innerHTML = `
+                    <span class="countdown-icon"><i class="fas fa-hourglass-half"></i></span>
+                    <span class="countdown-text"></span>
+                    <span class="countdown-time"></span>
+                `;
                 document.body.appendChild(banner);
             }
+            const textEl = banner.querySelector('.countdown-text');
+            const timeEl = banner.querySelector('.countdown-time');
+
             const tick = () => {
                 const now = Date.now();
                 const remaining = Math.max(0, deadline - now);
                 const m = Math.floor(remaining / 60000);
                 const s = Math.floor((remaining % 60000) / 1000);
                 if (remaining > 0) {
-                    banner.textContent = `⏳ El proveedor finalizó el encuentro. Confirma que todo está bien. Tiempo restante: ${m}:${String(s).padStart(2,'0')}.`;
+                    banner.classList.remove('expired');
+                    textEl.textContent = 'El proveedor finalizó el encuentro. Confirma que todo está bien.';
+                    timeEl.textContent = `${m}:${String(s).padStart(2,'0')}`;
                 } else {
-                    banner.textContent = '⌛ Tiempo agotado. Si hay algún problema, puedes reportarlo.';
-                    const btn = document.getElementById('completeEncounterBtn');
-                    if (btn) {
-                        btn.textContent = 'Reportar problema';
-                        btn.style.background = '#ef4444';
-                        btn.onclick = () => this.reportEncounterProblem(order.id);
+                    banner.classList.add('expired');
+                    textEl.textContent = 'Tiempo agotado. Si hay algún problema, puedes reportarlo.';
+                    timeEl.textContent = '0:00';
+                    // Actualizar la barra de acción a modo "reportar problema"
+                    const bar = document.getElementById('completeEncounterBtn');
+                    if (bar) {
+                        bar.classList.add('danger');
+                        const icon = bar.querySelector('.encounter-bar-icon i');
+                        if (icon) icon.className = 'fas fa-triangle-exclamation';
+                        const title = bar.querySelector('.encounter-bar-title');
+                        if (title) title.textContent = 'Tiempo de confirmación agotado';
+                        const sub = bar.querySelector('.encounter-bar-sub');
+                        if (sub) sub.textContent = 'Si hubo un problema, puedes reportarlo.';
+                        const btn = bar.querySelector('.encounter-bar-btn');
+                        if (btn) {
+                            btn.textContent = 'Reportar problema';
+                            btn.onclick = () => this.reportEncounterProblem(order.id);
+                        }
                     }
                     clearInterval(timerId);
                 }
@@ -2005,18 +2180,8 @@ class ChatClient {
         const requiresPayment = paidMessageTypes.includes(type) && !options.alreadyPaid;
 
         // SEGURIDAD (anti-manipulación): igual que el mensaje normal, el precio
-        // se toma del DUEÑO del perfil destino en users/{otherUserId}/profile/messagePrice,
-        // leído DIRECTO de Firebase (fuente de verdad en servidor).
-        let CLIENT_COST = 390;
-        try {
-            const priceSnap = await this.database
-                .ref(`users/${this.otherUserId}/profile/messagePrice`)
-                .once('value');
-            const remotePrice = priceSnap.val();
-            if (typeof remotePrice === 'number' && remotePrice >= 0) CLIENT_COST = remotePrice;
-        } catch (priceErr) {
-            console.warn('⚠️ No se pudo leer el precio del destinatario; usando por defecto:', priceErr);
-        }
+        // se toma del DUEÑO del perfil destino (FUENTE AUTORITATIVA: Supabase).
+        const CLIENT_COST = await this.getProviderPrice();
         // El 100% del precio va al dueño del perfil. La comisión (50%) se aplica
         // más adelante, en el retiro (no aquí).
         const PROVIDER_CREDIT = CLIENT_COST;

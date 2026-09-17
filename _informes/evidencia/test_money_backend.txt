@@ -1,0 +1,24 @@
+Tokens obtenidos. A=d7bdeb0c-c8f0-47b7-8f32-b10f235343a9 B=c83e3d1e-6741-478d-b134-2cc4a45fe313
+A=d7bdeb0c-c8f0-47b7-8f32-b10f235343a9  B=c83e3d1e-6741-478d-b134-2cc4a45fe313
+
+Saldos iniciales: [{"user_id":"d7bdeb0c-c8f0-47b7-8f32-b10f235343a9","balance":1000}] [{"user_id":"c83e3d1e-6741-478d-b134-2cc4a45fe313","balance":0}]
+
+== FLUJOS ==
+  PASS  transfer 100 A->B ok
+  PASS  A=900 B=100 tras transfer
+  PASS  transfer idempotente (sigue 900/100)
+  PASS  saldo insuficiente no cobra (A=900)
+  PASS  send_message cobra 150 (precio de B, no 1)
+
+== ATAQUES ==
+  PASS  ATAQUE: escribir balance directo BLOQUEADO
+  PASS  ATAQUE: UPDATE balance directo BLOQUEADO
+  PASS  ATAQUE: borrar ledger BLOQUEADO
+  PASS  ATAQUE: auto-acreditarse via rpc_credit BLOQUEADO (A sigue 750)
+  PASS  transfer B->A baja B y sube A (pagador=B)
+  PASS  ATAQUE: leer balance ajeno BLOQUEADO (0 filas)
+  PASS  ATAQUE: leer ledger ajeno BLOQUEADO (0 filas)
+  PASS  ATAQUE: INSERT balance directo BLOQUEADO
+  PASS  ATAQUE: INSERT ledger directo BLOQUEADO
+
+=== RESULTADO: 14 pass, 0 fail ===

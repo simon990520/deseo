@@ -774,13 +774,26 @@ class AdminDashboard {
                 console.log('ℹ️ Retiro con fondos ya reservados: no se descuenta de nuevo.');
             } else if (window.DeseoMoney) {
                 if (transactionType === 'outcome') {
-                    await window.DeseoMoney.charge(this.database, userId, amt, {
+                    // Retiro aprobado: debitar al usuario objetivo (server-authoritative).
+                    var rCh = await window.DeseoMoney.adminCharge(this.database, userId, amt, {
                         reason: 'withdrawal_approved', opId: `approve_${transactionId}`
                     });
+                    if (rCh && rCh.ok === false) {
+                        console.error('❌ No se pudo debitar (admin):', rCh.reason);
+                        alert('❌ No se pudo descontar el saldo: ' + (rCh.reason || 'error'));
+                        return;
+                    }
                 } else {
-                    await window.DeseoMoney.credit(this.database, userId, amt, {
+                    // Depósito aprobado: acreditar al usuario objetivo (server-authoritative).
+                    var rCr = await window.DeseoMoney.adminCredit(this.database, userId, amt, {
                         reason: 'deposit_approved', opId: `approve_${transactionId}`
                     });
+                    if (rCr && rCr.ok === false) {
+                        console.error('❌ No se pudo acreditar (admin):', rCr.reason);
+                        alert('❌ No se pudo acreditar el saldo: ' + (rCr.reason || 'error') +
+                            (rCr.reason === 'forbidden' ? ' (tu cuenta no tiene permisos de admin en el servidor)' : ''));
+                        return;
+                    }
                 }
             } else {
                 console.error('❌ DeseoMoney no disponible; no se ajustó el balance por seguridad.');
@@ -836,7 +849,7 @@ class AdminDashboard {
             if (transactionData.type === 'outcome' && transactionData.fundsReserved === true && window.DeseoMoney) {
                 const amt = parseInt(transactionData.amount, 10);
                 if (Number.isFinite(amt) && amt > 0) {
-                    await window.DeseoMoney.credit(this.database, userId, amt, {
+                    await window.DeseoMoney.adminCredit(this.database, userId, amt, {
                         reason: 'withdrawal_rejected_refund', opId: `refund_${transactionId}`
                     });
                     await transactionRef.update({ fundsReserved: false, refundedAt: new Date().toISOString() });
@@ -1079,6 +1092,19 @@ class AdminDashboard {
                     });
                 });
             }
+
+            // Enriquecer el balance con la FUENTE AUTORITATIVA (Supabase).
+            // Firebase queda como valor de respaldo si Supabase no responde.
+            try {
+                if (window.DeseoMoney && window.DeseoMoney.getBalance) {
+                    await Promise.all(this.allUsers.map(async (u) => {
+                        try {
+                            const b = await window.DeseoMoney.getBalance(this.database, u.id);
+                            if (typeof b === 'number' && Number.isFinite(b)) u.balance = b;
+                        } catch (_) { /* noop */ }
+                    }));
+                }
+            } catch (_) { /* noop */ }
 
             this.renderUsers();
         } catch (error) {

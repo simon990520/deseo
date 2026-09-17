@@ -1,0 +1,28 @@
+
+===== index.html =====
+  state: {"hasClerk":true,"hasDeseoAuth":false,"hasDeseoMoney":true,"hasSbCfg":true,"title":"Deseo - Plataforma de Micro-Deseos","bodyLen":18309044}
+  errCount=37 | ❌ Firebase o usuario no disponible || REQFAIL: https://api.mapbox.com/styles/v1/mapbox/dark-v11?sdk=js-3.0.1&access_token=pk.eyJ1Ijoic2ltb245…REDACTED… net::ERR_ABORTED || REQFAIL: https://api.mapbox.com/v4/mapbox.mapbox-streets-v8,mapbox.mapbox-terrain-v2,mapbox.mapbox-bathymetry-v2/11/1003/771.vector.pbf?sku=101YpjTfKeoI5&access_token=pk.eyJ1Ijoic2ltb245…REDACTED… net::ERR_ABORTED || REQFAIL: https://api.mapbox.com/v4/mapbox.mapbox-streets-v8,mapbox.mapbox-terrain-v2,mapbox.mapbox-bathymetry-v2/11/1002/771.vector.pbf?sku=101YpjTfKeoI5&access_token=pk.eyJ1Ijoic2ltb245…REDACTED… net::ERR_ABORTED
+
+===== chats.html =====
+  state: {"hasClerk":true,"hasDeseoAuth":true,"hasDeseoMoney":true,"hasSbCfg":true,"title":"Mis Chats | Deseo","bodyLen":5023}
+  errCount=2 | ❌ Error cargando usuario: Error: Usuario no autenticado || ❌ Firebase o usuario no inicializado
+
+===== wallet.html =====
+  state: {"hasClerk":true,"hasDeseoAuth":true,"hasDeseoMoney":true,"hasSbCfg":true,"title":"Billetera - Deseo","bodyLen":13183}
+  errCount=0
+
+===== settings.html =====
+  state: {"hasClerk":true,"hasDeseoAuth":true,"hasDeseoMoney":false,"hasSbCfg":true,"title":"Configuración - Deseo","bodyLen":6756}
+  errCount=0
+
+===== chat-client.html =====
+  state: {"hasClerk":true,"hasDeseoAuth":true,"hasDeseoMoney":true,"hasSbCfg":true,"title":"Mis Chats | Deseo","bodyLen":5023}
+  errCount=4 | ❌ Error cargando usuario: Error: Usuario no autenticado || ❌ Faltan parámetros en la URL [object Object] || ❌ Error cargando usuario: Error: Usuario no autenticado || ❌ Firebase o usuario no inicializado
+
+===== chat-provider.html =====
+  state: {"hasClerk":true,"hasDeseoAuth":true,"hasDeseoMoney":true,"hasSbCfg":true,"title":"Mis Chats | Deseo","bodyLen":5023}
+  errCount=4 | ❌ Error cargando usuario: Error: Usuario no autenticado || ❌ Faltan parámetros en la URL [object Object] || ❌ Error cargando usuario: Error: Usuario no autenticado || ❌ Firebase o usuario no inicializado
+
+===== admin.html =====
+  state: {"hasClerk":true,"hasDeseoAuth":false,"hasDeseoMoney":true,"hasSbCfg":true,"title":"Admin Dashboard - Deseo Platform","bodyLen":34794}
+  errCount=0

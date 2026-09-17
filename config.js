@@ -137,6 +137,17 @@
             publishableKey: LOCAL.CLERK_PUBLISHABLE_KEY || 'pk_test_XXXXXXXX'
         },
 
+        // ===== SUPABASE (capa de dinero server-authoritative, anti-hack) =====
+        // La anon key es pública (segura en el navegador); la seguridad real la
+        // impone RLS + RPC SECURITY DEFINER en el servidor. NUNCA poner aquí la
+        // sb_secret_ / service_role.
+        SUPABASE: {
+            url: LOCAL.SUPABASE_URL || '',
+            anonKey: LOCAL.SUPABASE_ANON_KEY || '',
+            // Nombre del JWT template de Clerk que Supabase verifica.
+            jwtTemplate: (LOCAL.SUPABASE_JWT_TEMPLATE || 'supabase')
+        },
+
         // ===== API (backend serverless) =====
         // Endpoints del backend. VERIFY_ENDPOINT valida el token de Clerk y
         // devuelve { valid, userId, isAdmin } (isAdmin derivado de ADMIN_USER_IDS

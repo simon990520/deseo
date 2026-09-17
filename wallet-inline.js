@@ -40,6 +40,9 @@ class InlineWalletManager {
             if (this.database && this.transactionListener) {
                 this.database.ref(`transactions/${this.getCurrentUserId()}`).off('value', this.transactionListener);
             }
+            if (this.balanceListenerRef && this.balanceListener) {
+                try { this.balanceListenerRef.off('value', this.balanceListener); } catch (_) {}
+            }
         });
     }
 
@@ -207,18 +210,95 @@ class InlineWalletManager {
             const userRef = this.database.ref(`users/${userId}`);
             const snapshot = await userRef.once('value');
             const userData = snapshot.val();
-            
-            if (userData && userData.balance !== undefined) {
+
+            // FUENTE AUTORITATIVA del saldo: Supabase (balances). Firebase queda
+            // como fallback mientras se migra. El saldo real vive en Supabase.
+            let sbBalance = null;
+            try {
+                if (window.DeseoMoney && window.DeseoMoney.getBalance) {
+                    sbBalance = await window.DeseoMoney.getBalance(this.database, userId);
+                }
+            } catch (_) { /* noop */ }
+
+            if (typeof sbBalance === 'number' && Number.isFinite(sbBalance)) {
+                this.balance = sbBalance;
+                console.log('✅ Balance cargado desde Supabase:', this.balance);
+            } else if (userData && userData.balance !== undefined) {
                 this.balance = parseFloat(userData.balance);
-                console.log('✅ Balance cargado desde Firebase:', this.balance);
+                console.log('✅ Balance cargado desde Firebase (fallback):', this.balance);
             } else {
                 this.balance = 0;
                 console.log('ℹ️ Usuario nuevo, balance inicial: 0');
             }
+
+            // Listener en TIEMPO REAL sobre el saldo: cuando el admin aprueba una
+            // recarga/retiro o llega una nueva transacción que modifica el balance,
+            // el valor mostrado se actualiza automáticamente sin recargar la página.
+            this.setupBalanceListener(userId);
+            // Refrescar desde Supabase (fuente de verdad) periódicamente.
+            this.setupSupabaseBalancePoll(userId);
         } catch (error) {
             console.error('❌ Error loading balance from Firebase:', error);
             this.balance = 0;
         }
+    }
+
+    // Sondeo periódico del saldo REAL (Supabase). El RTDB de Firebase ya no es
+    // la fuente de verdad; este poll mantiene la UI sincronizada.
+    setupSupabaseBalancePoll(userId) {
+        if (this._sbPollTimer) { clearInterval(this._sbPollTimer); this._sbPollTimer = null; }
+        const tick = async () => {
+            try {
+                if (!window.DeseoMoney || !window.DeseoMoney.getBalance) return;
+                const b = await window.DeseoMoney.getBalance(this.database, userId);
+                if (typeof b === 'number' && Number.isFinite(b) && b !== this.balance) {
+                    this.balance = b;
+                    this.renderBalance();
+                }
+            } catch (_) { /* noop */ }
+        };
+        this._sbPollTimer = setInterval(tick, 15000);
+        tick();
+    }
+
+    setupBalanceListener(userId) {
+        if (!this.database) return;
+
+        // Evitar duplicar listeners si loadBalance() se llama varias veces.
+        if (this.balanceListener && this.balanceListenerRef) {
+            try { this.balanceListenerRef.off('value', this.balanceListener); } catch (_) {}
+        }
+
+        const balanceRef = this.database.ref(`users/${userId}/balance`);
+        this.balanceListenerRef = balanceRef;
+
+        this.balanceListener = (snapshot) => {
+            const raw = snapshot.val();
+            const newBalance = (raw === null || raw === undefined) ? 0 : parseFloat(raw);
+            const safeBalance = Number.isFinite(newBalance) ? newBalance : 0;
+
+            if (safeBalance !== this.balance) {
+                const previous = this.balance;
+                this.balance = safeBalance;
+                console.log(`🔄 Balance actualizado en tiempo real: ${previous} → ${this.balance}`);
+                this.renderBalance();
+
+                // Feedback visual cuando el saldo aumenta (recarga aprobada, etc.)
+                if (this.balance > previous) {
+                    this.flashBalance();
+                }
+            }
+        };
+
+        balanceRef.on('value', this.balanceListener);
+        console.log('👂 Listener de balance en tiempo real activado');
+    }
+
+    flashBalance() {
+        const balanceElement = document.getElementById('totalBalance');
+        if (!balanceElement) return;
+        balanceElement.classList.add('balance-updated');
+        setTimeout(() => balanceElement.classList.remove('balance-updated'), 1200);
     }
 
     async loadTransactions() {

@@ -1,0 +1,12 @@
+PASS  mensaje: transfer A->B 100 ok
+PASS  mensaje: A=900 B=100 (un solo cobro)
+PASS  mensaje: reintento idempotente (A=900)
+PASS  tip: A=850 B=150
+PASS  escrow hold 200 ok
+PASS  escrow: A=650 custodia=200
+PASS  escrow: liberar ajeno BLOQUEADO
+PASS  escrow release ok
+PASS  escrow liberado: B=350 custodia=0
+PASS  escrow release idempotente (B=350)
+
+=== E2E FLOWS: 10 pass, 0 fail ===

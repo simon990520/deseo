@@ -274,24 +274,42 @@ class ChatProvider {
         try {
             if (!this.database || !this.otherUserId) return;
             const badge = document.getElementById('clientBalanceBadge');
-            // Path real: users/{id}/balance, con fallback a wallet/{id}/balance
-            const balanceRef = this.database.ref(`users/${this.otherUserId}/balance`);
-            let snap = await balanceRef.once('value');
-            let balanceValue = snap.val();
-            if (balanceValue === null || balanceValue === undefined) {
-                const alt = await this.database.ref(`wallet/${this.otherUserId}/balance`).once('value');
-                balanceValue = alt.val();
+
+            // FUENTE AUTORITATIVA: Supabase (balances). Fallback: Firebase RTDB.
+            let balance = null;
+            try {
+                if (window.DeseoMoney && window.DeseoMoney.getBalance) {
+                    const b = await window.DeseoMoney.getBalance(this.database, this.otherUserId);
+                    if (typeof b === 'number' && Number.isFinite(b)) balance = b;
+                }
+            } catch (_) { /* noop */ }
+
+            if (balance === null) {
+                // Fallback RTDB: users/{id}/balance, con fallback a wallet/{id}/balance.
+                const balanceRef = this.database.ref(`users/${this.otherUserId}/balance`);
+                let snap = await balanceRef.once('value');
+                let balanceValue = snap.val();
+                if (balanceValue === null || balanceValue === undefined) {
+                    const alt = await this.database.ref(`wallet/${this.otherUserId}/balance`).once('value');
+                    balanceValue = alt.val();
+                }
+                balance = parseInt(balanceValue || '0', 10);
             }
-            const balance = parseInt(balanceValue || '0', 10);
+
             if (badge) {
                 badge.textContent = `${balance} pesos`;
                 badge.style.display = 'inline-block';
             }
-            // Suscribirse a cambios en tiempo real
-            balanceRef.on('value', (s) => {
-                const val = parseInt((s && s.val()) || '0', 10);
-                if (badge) badge.textContent = `${val} pesos`;
-            });
+
+            // Refresco periódico desde la fuente de verdad (Supabase).
+            if (this._clientBalanceTimer) clearInterval(this._clientBalanceTimer);
+            this._clientBalanceTimer = setInterval(async () => {
+                try {
+                    if (!window.DeseoMoney || !window.DeseoMoney.getBalance) return;
+                    const b = await window.DeseoMoney.getBalance(this.database, this.otherUserId);
+                    if (badge && typeof b === 'number' && Number.isFinite(b)) badge.textContent = `${b} pesos`;
+                } catch (_) { /* noop */ }
+            }, 15000);
         } catch (e) {
             console.warn('No se pudo cargar balance del cliente:', e);
         }
@@ -561,10 +579,18 @@ class ChatProvider {
     async viewClientBalance() {
         if (!this.database || !this.otherUserId) return;
         try {
-            // Ajuste al path real usado en la app: users/{id}/balance
-            const balanceRef = this.database.ref(`users/${this.otherUserId}/balance`);
-            const snap = await balanceRef.once('value');
-            const balance = parseInt(snap.val() || '0', 10);
+            // FUENTE AUTORITATIVA: Supabase. Fallback: users/{id}/balance (RTDB).
+            let balance = null;
+            try {
+                if (window.DeseoMoney && window.DeseoMoney.getBalance) {
+                    const b = await window.DeseoMoney.getBalance(this.database, this.otherUserId);
+                    if (typeof b === 'number' && Number.isFinite(b)) balance = b;
+                }
+            } catch (_) { /* noop */ }
+            if (balance === null) {
+                const snap = await this.database.ref(`users/${this.otherUserId}/balance`).once('value');
+                balance = parseInt(snap.val() || '0', 10);
+            }
             this.showNotification(`Balance del cliente: ${balance} pesos`, 'info');
         } catch (e) {
             console.error('❌ Error consultando balance del cliente:', e);
@@ -630,12 +656,20 @@ class ChatProvider {
             
             if (acceptedOrders.length === 0) return;
 
-            const btn = document.createElement('button');
-            btn.id = 'completeEncounterBtn';
-            btn.textContent = 'Finalizar encuentro';
-            btn.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:9999;padding:10px 14px;border-radius:8px;border:none;background:#0ea5e9;color:#fff;cursor:pointer;font-weight:600;box-shadow:0 6px 16px rgba(0,0,0,.25)';
-            btn.onclick = () => this.openCompleteEncounterDialog();
-            document.body.appendChild(btn);
+            // Barra de acción integrada al diseño del chat (no un botón suelto)
+            const bar = document.createElement('div');
+            bar.id = 'completeEncounterBtn';
+            bar.className = 'encounter-action-bar';
+            bar.innerHTML = `
+                <div class="encounter-bar-icon"><i class="fas fa-handshake"></i></div>
+                <div class="encounter-bar-text">
+                    <div class="encounter-bar-title">Encuentro en curso</div>
+                    <div class="encounter-bar-sub">Marca el encuentro como finalizado cuando termines.</div>
+                </div>
+                <button class="encounter-bar-btn" type="button">Finalizar encuentro</button>
+            `;
+            bar.querySelector('.encounter-bar-btn').addEventListener('click', () => this.openCompleteEncounterDialog());
+            document.body.appendChild(bar);
         } catch (_) {}
     }
 
@@ -650,13 +684,51 @@ class ChatProvider {
                 return;
             }
             const order = activeOrders.sort((a,b) => (a.createdAt||'').localeCompare(b.createdAt||''))[activeOrders.length-1];
-            const proceed = window.confirm('¿Confirmas que el encuentro ha finalizado correctamente? (Aceptar para finalizar, Cancelar para abrir disputa)');
-            if (proceed) {
+
+            // Modal de confirmación con diseño propio (reemplaza confirm/prompt nativos)
+            const modal = document.createElement('div');
+            modal.className = 'encounter-confirm-modal';
+            modal.innerHTML = `
+                <div class="encounter-confirm-card">
+                    <div class="encounter-confirm-header">
+                        <div class="encounter-confirm-icon"><i class="fas fa-handshake"></i></div>
+                        <h3>¿Finalizar el encuentro?</h3>
+                        <p>Confirma que el encuentro se realizó correctamente. El cliente tendrá 5 minutos para confirmar y liberar el pago.</p>
+                    </div>
+                    <div class="encounter-confirm-body" style="display:none;">
+                        <textarea class="encounter-dispute-reason" placeholder="Describe brevemente el problema..."></textarea>
+                    </div>
+                    <div class="encounter-confirm-footer">
+                        <button class="confirm-ok-btn" type="button"><i class="fas fa-check"></i> Sí, finalizar encuentro</button>
+                        <button class="confirm-dispute-btn" type="button"><i class="fas fa-flag"></i> Reportar un problema</button>
+                        <button class="confirm-cancel-btn" type="button">Cancelar</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+
+            const close = () => modal.remove();
+            const body = modal.querySelector('.encounter-confirm-body');
+            const reasonInput = modal.querySelector('.encounter-dispute-reason');
+
+            modal.querySelector('.confirm-ok-btn').addEventListener('click', async () => {
+                close();
                 await this.providerConfirmOrder(order.id);
-            } else {
-                const reason = prompt('Describe el problema para disputa (opcional):', 'El cliente no confirma / Incumplimiento');
-                await this.raiseDispute(order.id, reason || 'Sin detalle');
-            }
+            });
+
+            modal.querySelector('.confirm-dispute-btn').addEventListener('click', async () => {
+                if (body.style.display === 'none') {
+                    body.style.display = 'block';
+                    reasonInput.focus();
+                    return;
+                }
+                const reason = (reasonInput.value || '').trim() || 'El cliente no confirma / Incumplimiento';
+                close();
+                await this.raiseDispute(order.id, reason);
+            });
+
+            modal.querySelector('.confirm-cancel-btn').addEventListener('click', close);
+            modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
         } catch (e) {
             console.error('❌ Error abriendo finalización (proveedor):', e);
             this.showError('No se pudo abrir la finalización');
@@ -727,9 +799,17 @@ class ChatProvider {
             if (!banner) {
                 banner = document.createElement('div');
                 banner.id = 'orderCountdownBanner';
-                banner.style.cssText = 'position:fixed;left:16px;right:16px;bottom:72px;background:#0f172a;color:#fff;padding:10px 14px;border-radius:8px;z-index:9998;box-shadow:0 6px 16px rgba(0,0,0,.25);font-size:14px';
+                banner.className = 'order-countdown-banner';
+                banner.innerHTML = `
+                    <span class="countdown-icon"><i class="fas fa-hourglass-half"></i></span>
+                    <span class="countdown-text"></span>
+                    <span class="countdown-time"></span>
+                `;
                 document.body.appendChild(banner);
             }
+            const textEl = banner.querySelector('.countdown-text');
+            const timeEl = banner.querySelector('.countdown-time');
+
             const start = new Date(providerConfirmedAt).getTime();
             const deadline = start + 5 * 60 * 1000;
             const tick = () => {
@@ -738,10 +818,14 @@ class ChatProvider {
                 const m = Math.floor(remaining / 60000);
                 const s = Math.floor((remaining % 60000) / 1000);
                 if (remaining > 0) {
-                    banner.textContent = `⏳ Esperando confirmación del cliente. Tiempo restante: ${m}:${String(s).padStart(2,'0')}.`;
+                    banner.classList.remove('expired');
+                    textEl.textContent = 'Esperando confirmación del cliente.';
+                    timeEl.textContent = `${m}:${String(s).padStart(2,'0')}`;
                 } else {
                     clearInterval(timerId);
-                    banner.textContent = '⌛ Tiempo agotado. El cliente no confirmó. Puedes reclamar el pago.';
+                    banner.classList.add('expired');
+                    textEl.textContent = 'Tiempo agotado. El cliente no confirmó. Puedes reclamar el pago.';
+                    timeEl.textContent = '0:00';
                     // Mostrar botón de reclamar pago al proveedor
                     this.showClaimPaymentButton(orderId);
                 }
@@ -755,37 +839,85 @@ class ChatProvider {
         try {
             const existing = document.getElementById('claimPaymentBtn');
             if (existing) return;
-            
-            // Ocultar el botón de finalizar encuentro para evitar superposición
-            const finalizarBtn = document.getElementById('completeEncounterBtn');
-            if (finalizarBtn) {
-                finalizarBtn.style.display = 'none';
+
+            // Reutilizar la barra de acción existente en modo "reclamar pago"
+            const bar = document.getElementById('completeEncounterBtn');
+            if (bar) {
+                bar.classList.add('danger');
+                const icon = bar.querySelector('.encounter-bar-icon i');
+                if (icon) icon.className = 'fas fa-triangle-exclamation';
+                const title = bar.querySelector('.encounter-bar-title');
+                if (title) title.textContent = 'El cliente no confirmó';
+                const sub = bar.querySelector('.encounter-bar-sub');
+                if (sub) sub.textContent = 'Puedes reclamar el pago para revisión del administrador.';
+                const btn = bar.querySelector('.encounter-bar-btn');
+                if (btn) {
+                    btn.textContent = 'Reclamar pago';
+                    btn.onclick = () => this.claimPaymentAsProvider(orderId);
+                }
+                return;
             }
-            
-            const btn = document.createElement('button');
-            btn.id = 'claimPaymentBtn';
-            btn.textContent = 'Reclamar pago';
-            btn.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:9999;padding:10px 14px;border-radius:8px;border:none;background:#f59e0b;color:#fff;cursor:pointer;font-weight:600;box-shadow:0 6px 16px rgba(0,0,0,.25)';
-            btn.onclick = () => this.claimPaymentAsProvider(orderId);
-            document.body.appendChild(btn);
+
+            // Si no existe la barra, crear una nueva
+            const newBar = document.createElement('div');
+            newBar.id = 'claimPaymentBtn';
+            newBar.className = 'encounter-action-bar danger';
+            newBar.innerHTML = `
+                <div class="encounter-bar-icon"><i class="fas fa-triangle-exclamation"></i></div>
+                <div class="encounter-bar-text">
+                    <div class="encounter-bar-title">El cliente no confirmó</div>
+                    <div class="encounter-bar-sub">Puedes reclamar el pago para revisión del administrador.</div>
+                </div>
+                <button class="encounter-bar-btn" type="button">Reclamar pago</button>
+            `;
+            newBar.querySelector('.encounter-bar-btn').addEventListener('click', () => this.claimPaymentAsProvider(orderId));
+            document.body.appendChild(newBar);
         } catch (_) {}
     }
 
     async claimPaymentAsProvider(orderId) {
         try {
-            const reason = prompt('Describe por qué reclamas el pago (el cliente no confirmó en 5 minutos):', 'El cliente no confirmó la finalización del encuentro en el tiempo establecido');
-            if (!reason) return;
+            // Modal de confirmación con diseño propio (reemplaza prompt nativo)
+            const modal = document.createElement('div');
+            modal.className = 'encounter-confirm-modal';
+            modal.innerHTML = `
+                <div class="encounter-confirm-card">
+                    <div class="encounter-confirm-header">
+                        <div class="encounter-confirm-icon" style="background:linear-gradient(135deg,#f59e0b,#d97706);box-shadow:0 10px 26px rgba(245,158,11,.4);"><i class="fas fa-hand-holding-dollar"></i></div>
+                        <h3>Reclamar pago</h3>
+                        <p>El cliente no confirmó en el tiempo establecido. Describe por qué reclamas el pago; un administrador revisará el caso.</p>
+                    </div>
+                    <div class="encounter-confirm-body">
+                        <textarea class="encounter-dispute-reason" placeholder="Describe por qué reclamas el pago...">El cliente no confirmó la finalización del encuentro en el tiempo establecido</textarea>
+                    </div>
+                    <div class="encounter-confirm-footer">
+                        <button class="confirm-ok-btn" type="button" style="background:linear-gradient(135deg,#f59e0b,#d97706);box-shadow:0 6px 16px rgba(245,158,11,.35);"><i class="fas fa-paper-plane"></i> Enviar reclamo</button>
+                        <button class="confirm-cancel-btn" type="button">Cancelar</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
 
-            // Crear disputa en lugar de liberar automáticamente
-            await this.raiseDispute(orderId, reason);
+            const close = () => modal.remove();
+            const reasonInput = modal.querySelector('.encounter-dispute-reason');
 
-            this.showNotification('Disputa creada. El administrador revisará el caso.', 'info');
-            
-            // Limpiar UI
-            const btn = document.getElementById('claimPaymentBtn');
-            const banner = document.getElementById('orderCountdownBanner');
-            if (btn) btn.remove();
-            if (banner) banner.remove();
+            modal.querySelector('.confirm-ok-btn').addEventListener('click', async () => {
+                const reason = (reasonInput.value || '').trim();
+                if (!reason) { reasonInput.focus(); return; }
+                close();
+                await this.raiseDispute(orderId, reason);
+                this.showNotification('Disputa creada. El administrador revisará el caso.', 'info');
+                // Limpiar UI
+                const btn = document.getElementById('claimPaymentBtn');
+                const bar = document.getElementById('completeEncounterBtn');
+                const banner = document.getElementById('orderCountdownBanner');
+                if (btn) btn.remove();
+                if (bar) bar.remove();
+                if (banner) banner.remove();
+            });
+
+            modal.querySelector('.confirm-cancel-btn').addEventListener('click', close);
+            modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
         } catch (e) {
             console.error('❌ Error creando disputa:', e);
             this.showError('Error creando disputa');
@@ -812,49 +944,52 @@ class ChatProvider {
         const modal = document.createElement('div');
         modal.className = 'rating-modal';
         modal.innerHTML = `
-            <div class="modal-overlay">
-                <div class="modal-content">
-                    <div class="modal-header">
-                        <h3>Calificar ${userType}</h3>
-                        <button class="close-btn" onclick="this.closest('.rating-modal').remove()">
-                            <i class="fas fa-times"></i>
-                        </button>
+            <div class="rating-card">
+                <div class="rating-card-header">
+                    <h3><i class="fas fa-star"></i> Calificar ${userType}</h3>
+                    <button class="close-btn" type="button" aria-label="Cerrar">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="rating-card-body">
+                    <p>¿Cómo fue tu experiencia? Califica del 1 al 5 (opcional).</p>
+                    <div class="rating-stars">
+                        <span class="star" data-rating="1">★</span>
+                        <span class="star" data-rating="2">★</span>
+                        <span class="star" data-rating="3">★</span>
+                        <span class="star" data-rating="4">★</span>
+                        <span class="star" data-rating="5">★</span>
                     </div>
-                    <div class="modal-body">
-                        <p>Califica del 1 al 5 (opcional):</p>
-                        <div class="rating-stars">
-                            <span class="star" data-rating="1">★</span>
-                            <span class="star" data-rating="2">★</span>
-                            <span class="star" data-rating="3">★</span>
-                            <span class="star" data-rating="4">★</span>
-                            <span class="star" data-rating="5">★</span>
-                        </div>
-                        <textarea placeholder="Comentario (opcional)" class="rating-comment"></textarea>
-                        <div class="modal-actions">
-                            <button class="btn btn-secondary" onclick="this.closest('.rating-modal').remove()">Omitir</button>
-                            <button class="btn btn-primary" onclick="window.submitRating()">Enviar</button>
-                        </div>
-                    </div>
+                    <textarea placeholder="Comentario (opcional)" class="rating-comment"></textarea>
+                </div>
+                <div class="rating-card-footer">
+                    <button class="rating-skip-btn" type="button">Omitir</button>
+                    <button class="rating-submit-btn" type="button">Enviar</button>
                 </div>
             </div>
         `;
-        
+
         document.body.appendChild(modal);
-        
-        // Configurar estrellas
+
+        const close = () => modal.remove();
+
+        // Configurar estrellas (usando clase .active en vez de estilos inline)
         const stars = modal.querySelectorAll('.star');
         let selectedRating = 0;
         stars.forEach((star, index) => {
             star.addEventListener('click', () => {
                 selectedRating = index + 1;
                 stars.forEach((s, i) => {
-                    s.style.color = i < selectedRating ? '#ffd700' : '#ccc';
+                    s.classList.toggle('active', i < selectedRating);
                 });
             });
         });
-        
-        // Función global para enviar
-        window.submitRating = async () => {
+
+        modal.querySelector('.close-btn').addEventListener('click', close);
+        modal.querySelector('.rating-skip-btn').addEventListener('click', close);
+        modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+
+        modal.querySelector('.rating-submit-btn').addEventListener('click', async () => {
             const comment = modal.querySelector('.rating-comment').value;
             if (selectedRating > 0) {
                 const ratingId = `rating_${Date.now()}`;
@@ -869,9 +1004,8 @@ class ChatProvider {
                 });
                 this.showNotification('Calificación enviada', 'success');
             }
-            modal.remove();
-            delete window.submitRating;
-        };
+            close();
+        });
     }
 
     async raiseDispute(orderId, reason) {
@@ -1706,24 +1840,52 @@ class ChatProvider {
 
     showNotification(message, type = 'info') {
         console.log(`🔔 [${type.toUpperCase()}] ${message}`);
-        const notification = document.createElement('div');
-        notification.style.cssText = `
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            background: ${type === 'success' ? '#4CAF50' : type === 'error' ? '#f44336' : '#2196F3'};
-            color: white;
-            padding: 12px 20px;
-            border-radius: 8px;
-            z-index: 10000;
-            font-size: 14px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+
+        // Contenedor de toasts (se crea una sola vez y apila las notificaciones)
+        let container = document.getElementById('chatToastContainer');
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'chatToastContainer';
+            container.className = 'chat-toast-container';
+            document.body.appendChild(container);
+        }
+
+        const icons = {
+            success: 'fa-check',
+            error: 'fa-times',
+            warning: 'fa-exclamation',
+            info: 'fa-info'
+        };
+        const titles = {
+            success: 'Listo',
+            error: 'Error',
+            warning: 'Atención',
+            info: 'Información'
+        };
+        const safeType = icons[type] ? type : 'info';
+
+        const toast = document.createElement('div');
+        toast.className = `chat-toast ${safeType}`;
+        toast.innerHTML = `
+            <div class="chat-toast-icon"><i class="fas ${icons[safeType]}"></i></div>
+            <div class="chat-toast-body">
+                <div class="chat-toast-title">${titles[safeType]}</div>
+                <div class="chat-toast-msg"></div>
+            </div>
+            <button class="chat-toast-close" aria-label="Cerrar"><i class="fas fa-times"></i></button>
         `;
-        notification.textContent = message;
-        document.body.appendChild(notification);
-        setTimeout(() => {
-            if (notification.parentNode) notification.parentNode.removeChild(notification);
-        }, 3000);
+        // Insertar el mensaje como texto (evita inyección de HTML)
+        toast.querySelector('.chat-toast-msg').textContent = message;
+
+        const remove = () => {
+            if (!toast.parentNode) return;
+            toast.classList.add('hiding');
+            setTimeout(() => { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 250);
+        };
+        toast.querySelector('.chat-toast-close').addEventListener('click', remove);
+
+        container.appendChild(toast);
+        setTimeout(remove, 4000);
     }
 
     showError(message) {
