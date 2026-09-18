@@ -335,6 +335,12 @@ class AdminDashboard {
             this.loadAnalytics();
         } else if (section === 'settings') {
             this.loadSettings();
+        } else if (section === 'escrow') {
+            this.loadEscrow();
+        } else if (section === 'reconciliation') {
+            this.loadReconciliation();
+        } else if (section === 'ledger') {
+            this.loadLedger();
         } else if (section === 'dashboard') {
             // Recargar datos del dashboard sin listeners persistentes
             this.loadDashboardData();
@@ -759,17 +765,13 @@ class AdminDashboard {
                 console.warn('⚠️ El monto del DOM no coincide con el de Firebase; se usa el de Firebase.');
             }
 
-            // Actualizar estado de la transacción y agregar mensaje
-            await transactionRef.update({
-                status: 'completed',
-                adminMessage: message || null,
-                adminActionDate: new Date().toISOString()
-            });
-
-            // Ajuste de balance ATÓMICO.
+            // CORRECCIÓN: mover el dinero PRIMERO y solo marcar 'completed' si tuvo
+            // éxito. Antes se marcaba 'completed' antes de mover dinero; si el
+            // crédito/débito fallaba, la transacción quedaba completada SIN mover
+            // fondos y el reintento se bloqueaba por "ya fue aprobada" (dinero
+            // perdido). El opId (approve_<id>) hace la operación idempotente.
             //  - Si es un retiro (outcome) que YA reservó fondos al solicitarse
             //    (fundsReserved === true), NO descontar de nuevo.
-            //  - Para depósitos (income) acreditar el monto.
             if (transactionType === 'outcome' && transactionData.fundsReserved === true) {
                 console.log('ℹ️ Retiro con fondos ya reservados: no se descuenta de nuevo.');
             } else if (window.DeseoMoney) {
@@ -797,7 +799,16 @@ class AdminDashboard {
                 }
             } else {
                 console.error('❌ DeseoMoney no disponible; no se ajustó el balance por seguridad.');
+                alert('❌ Motor de dinero no disponible. No se aprobó la transacción.');
+                return;
             }
+
+            // Dinero movido con éxito: ahora sí marcar la transacción como completada.
+            await transactionRef.update({
+                status: 'completed',
+                adminMessage: message || null,
+                adminActionDate: new Date().toISOString()
+            });
 
             console.log('✅ Transacción aprobada con mensaje exitosamente');
             const actionMessage = transactionType === 'outcome' 
@@ -837,24 +848,31 @@ class AdminDashboard {
                 return;
             }
 
-            // Actualizar estado de la transacción y agregar mensaje
+            // REEMBOLSO primero: si era un retiro (outcome) cuyos fondos ya se habían
+            // reservado al solicitar, devolver el saldo al usuario ANTES de marcar
+            // 'rejected'. Así, si el reembolso falla, la transacción sigue en su estado
+            // previo y puede reintentarse (no se pierde el dinero). opId fijo => idempotente.
+            if (transactionData.type === 'outcome' && transactionData.fundsReserved === true && window.DeseoMoney) {
+                const amt = parseInt(transactionData.amount, 10);
+                if (Number.isFinite(amt) && amt > 0) {
+                    const rr = await window.DeseoMoney.adminCredit(this.database, userId, amt, {
+                        reason: 'withdrawal_rejected_refund', opId: `refund_${transactionId}`
+                    });
+                    if (rr && rr.ok === false) {
+                        console.error('❌ No se pudo reembolsar (admin):', rr.reason);
+                        alert('❌ No se pudo reembolsar el saldo: ' + (rr.reason || 'error') + '. La transacción NO se rechazó para evitar perder el dinero.');
+                        return;
+                    }
+                    await transactionRef.update({ fundsReserved: false, refundedAt: new Date().toISOString() });
+                }
+            }
+
+            // Reembolso OK (o no aplicaba): marcar la transacción como rechazada.
             await transactionRef.update({
                 status: 'rejected',
                 adminMessage: message || null,
                 adminActionDate: new Date().toISOString()
             });
-
-            // REEMBOLSO: si era un retiro (outcome) cuyos fondos ya se habían
-            // reservado al solicitar, devolver el saldo al usuario.
-            if (transactionData.type === 'outcome' && transactionData.fundsReserved === true && window.DeseoMoney) {
-                const amt = parseInt(transactionData.amount, 10);
-                if (Number.isFinite(amt) && amt > 0) {
-                    await window.DeseoMoney.adminCredit(this.database, userId, amt, {
-                        reason: 'withdrawal_rejected_refund', opId: `refund_${transactionId}`
-                    });
-                    await transactionRef.update({ fundsReserved: false, refundedAt: new Date().toISOString() });
-                }
-            }
 
             console.log('✅ Transacción rechazada con mensaje');
             alert('✅ Transacción rechazada.');
@@ -1060,8 +1078,18 @@ class AdminDashboard {
     }
 
     downloadExcel(data, filename) {
-        // Implementación básica - en producción usar una librería como SheetJS
-        alert('Funcionalidad de Excel en desarrollo. Por ahora se descarga como CSV.');
+        // Si SheetJS está disponible, generar un .xlsx real; si no, CSV de respaldo.
+        if (typeof XLSX !== 'undefined') {
+            try {
+                const ws = XLSX.utils.json_to_sheet(data);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, 'Datos');
+                XLSX.writeFile(wb, filename);
+                return;
+            } catch (e) {
+                console.warn('⚠️ Error generando Excel, se usa CSV:', e && e.message);
+            }
+        }
         this.downloadCSV(data, filename.replace('.xlsx', '.csv'));
     }
 
@@ -1161,6 +1189,9 @@ class AdminDashboard {
                     </button>
                     <button class="btn-admin btn-message" onclick="adminApp.messageUser('${userIdAttr}')">
                         <i class="fas fa-comment"></i> Mensaje
+                    </button>
+                    <button class="btn-admin btn-warning" onclick="adminApp.openAdjustBalanceModal('${userIdAttr}')">
+                        <i class="fas fa-wallet"></i> Ajustar Saldo
                     </button>
                     ${user.status === 'active' ? 
                         `<button class="btn-admin btn-reject" onclick="adminApp.banUser('${userIdAttr}')">
@@ -1523,8 +1554,51 @@ class AdminDashboard {
     }
 
     generateReport(type) {
-        alert(`Generando reporte ${type}...`);
-        // Aquí se implementaría la generación de reportes
+        console.log(`📄 Generando reporte: ${type}`);
+        let data = [];
+        let filename = 'reporte.csv';
+
+        if (type === 'financial') {
+            const income = this.allTransactions
+                .filter(t => t.transaction.type === 'income' && t.transaction.status === 'completed')
+                .reduce((s, t) => s + (t.transaction.amount || 0), 0);
+            const outcome = this.allTransactions
+                .filter(t => t.transaction.type === 'outcome' && t.transaction.status === 'completed')
+                .reduce((s, t) => s + (t.transaction.amount || 0), 0);
+            data = [
+                { Concepto: 'Ingresos Totales (aprobados)', Valor: income },
+                { Concepto: 'Retiros Totales (aprobados)', Valor: outcome },
+                { Concepto: 'Balance Neto', Valor: income - outcome },
+                { Concepto: 'Transacciones Pendientes', Valor: this.stats.pendingTransactions },
+                { Concepto: 'Total Usuarios', Valor: this.stats.totalUsers },
+                { Concepto: 'Fecha de generación', Valor: new Date().toLocaleString('es-ES') }
+            ];
+            filename = 'reporte_financiero.csv';
+        } else if (type === 'users') {
+            data = this.allUsers.map(u => ({
+                ID: u.id,
+                Email: u.email || 'N/A',
+                Balance: u.balance || 0,
+                Estado: u.status || 'N/A',
+                'Última actividad': u.lastUpdated ? new Date(u.lastUpdated).toLocaleString('es-ES') : 'N/A'
+            }));
+            filename = 'reporte_usuarios.csv';
+        } else if (type === 'transactions') {
+            data = this.allTransactions.map(({ id, userId, transaction }) => ({
+                ID: id,
+                Usuario: userId,
+                Tipo: transaction.type === 'income' ? 'Depósito' : 'Retiro',
+                Monto: transaction.amount,
+                Estado: transaction.status,
+                Fecha: new Date(transaction.timestamp).toLocaleString('es-ES'),
+                Método: transaction.method || 'N/A'
+            }));
+            filename = 'reporte_transacciones.csv';
+        }
+
+        if (data.length === 0) { alert('No hay datos para generar el reporte.'); return; }
+        this.downloadCSV(data, filename);
+        alert('✅ Reporte generado y descargado.');
     }
 
     // ===== CONFIGURACIÓN DEL SISTEMA =====
@@ -1635,9 +1709,482 @@ class AdminDashboard {
         }
     }
 
-    backupData() {
-        alert('Funcionalidad de respaldo en desarrollo');
-        // Aquí se implementaría la funcionalidad de respaldo
+    async backupData() {
+        if (!this.database) { alert('❌ Firebase no disponible'); return; }
+        if (!confirm('¿Generar un respaldo completo de los datos (usuarios, transacciones, ledger, escrow)?')) return;
+
+        try {
+            // El dinero vive en Supabase (server-authoritative). Ledger y escrow
+            // deben leerse de Supabase vía RPCs admin; antes se leían de Firebase
+            // y salían VACÍOS tras la migración (respaldo incompleto).
+            const [usersSnap, txSnap, settingsSnap] = await Promise.all([
+                this.database.ref('users').once('value'),
+                this.database.ref('transactions').once('value'),
+                this.database.ref('admin/settings').once('value')
+            ]);
+
+            // Ledger + escrow desde Supabase (tolerante a fallos: si la RPC no
+            // está disponible, se registra y se continúa con lo demás).
+            let ledger = {}, escrow = {}, balances = {};
+            const sb = (window.DeseoSupabase) || (window.DeseoAuth && window.DeseoAuth.getSupabase && window.DeseoAuth.getSupabase());
+            if (sb && typeof sb.rpc === 'function') {
+                try {
+                    const led = await sb.rpc('rpc_admin_list_ledger', { p_limit: 100000 });
+                    if (led && !led.error && Array.isArray(led.data)) {
+                        led.data.forEach(function (row) { ledger[row.op_id || (row.user_id + '_' + row.created_at)] = row; });
+                    } else if (led && led.error) {
+                        console.warn('⚠️ Respaldo: no se pudo leer ledger de Supabase:', led.error.message);
+                    }
+                } catch (e) { console.warn('⚠️ Respaldo: error leyendo ledger:', e && e.message); }
+                try {
+                    const esc = await sb.rpc('rpc_admin_list_escrow');
+                    if (esc && !esc.error && Array.isArray(esc.data)) {
+                        esc.data.forEach(function (row) { escrow[row.order_id || (row.id + '')] = row; });
+                    } else if (esc && esc.error) {
+                        console.warn('⚠️ Respaldo: no se pudo leer escrow de Supabase:', esc.error.message);
+                    }
+                } catch (e) { console.warn('⚠️ Respaldo: error leyendo escrow:', e && e.message); }
+            } else {
+                console.warn('⚠️ Respaldo: Supabase no disponible; ledger/escrow irán vacíos.');
+            }
+
+            const backup = {
+                generatedAt: new Date().toISOString(),
+                users: usersSnap.val() || {},
+                transactions: txSnap.val() || {},
+                ledger: ledger,
+                escrow: escrow,
+                settings: settingsSnap.val() || {}
+            };
+
+            const json = JSON.stringify(backup, null, 2);
+            const blob = new Blob([json], { type: 'application/json' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = `respaldo_deseo_${new Date().toISOString().split('T')[0]}.json`;
+            link.click();
+
+            await this.logAdminAction('backup_data', { size: json.length });
+            alert('✅ Respaldo generado y descargado.');
+        } catch (error) {
+            console.error('❌ Error generando respaldo:', error);
+            alert('❌ Error al generar el respaldo: ' + error.message);
+        }
+    }
+
+    // ===== AJUSTE MANUAL DE SALDO (adminCredit / adminCharge) =====
+    openAdjustBalanceModal(userId) {
+        const modal = document.getElementById('adjustBalanceModal');
+        const userField = document.getElementById('adjustUserId');
+        const amountField = document.getElementById('adjustAmount');
+        const reasonField = document.getElementById('adjustReason');
+        const typeField = document.getElementById('adjustType');
+        if (!modal) return;
+
+        if (userField) userField.value = userId || '';
+        if (amountField) amountField.value = '';
+        if (reasonField) reasonField.value = '';
+        if (typeField) typeField.value = 'credit';
+
+        modal.style.display = 'flex';
+
+        const confirmBtn = document.getElementById('confirmAdjustBtn');
+        if (confirmBtn) {
+            // Evitar listeners duplicados reemplazando el nodo.
+            const clone = confirmBtn.cloneNode(true);
+            confirmBtn.parentNode.replaceChild(clone, confirmBtn);
+            clone.addEventListener('click', () => this.confirmAdjustBalance());
+        }
+    }
+
+    async confirmAdjustBalance() {
+        const userId = document.getElementById('adjustUserId')?.value?.trim();
+        const type = document.getElementById('adjustType')?.value || 'credit';
+        const amount = parseInt(document.getElementById('adjustAmount')?.value, 10);
+        const reason = document.getElementById('adjustReason')?.value?.trim();
+
+        if (!userId) { alert('❌ Usuario inválido.'); return; }
+        if (!Number.isFinite(amount) || amount <= 0) { alert('❌ Monto inválido.'); return; }
+        if (!reason) { alert('❌ El motivo es obligatorio (queda en auditoría).'); return; }
+        if (!window.DeseoMoney) { alert('❌ Motor de dinero no disponible.'); return; }
+
+        const verb = type === 'credit' ? 'acreditar' : 'debitar';
+        if (!confirm(`¿Confirmas ${verb} $${amount.toLocaleString('es-CO')} al usuario ${userId}?`)) return;
+
+        try {
+            const opId = `admin_adjust_${type}_${userId}_${Date.now()}`;
+            let res;
+            if (type === 'credit') {
+                res = await window.DeseoMoney.adminCredit(this.database, userId, amount, { reason, opId });
+            } else {
+                res = await window.DeseoMoney.adminCharge(this.database, userId, amount, { reason, opId });
+            }
+
+            if (res && res.ok === false) {
+                alert('❌ No se pudo aplicar el ajuste: ' + (res.reason || 'error') +
+                    (res.reason === 'forbidden' ? ' (tu cuenta no tiene permisos de admin en el servidor)' : '') +
+                    (res.reason === 'insufficient_funds' ? ' (saldo insuficiente)' : ''));
+                return;
+            }
+
+            // Registrar en auditoría (Firebase) para trazabilidad.
+            await this.logAdminAction('adjust_balance', {
+                userId, type, amount, reason, opId,
+                newBalance: res && res.balance
+            });
+
+            alert('✅ Ajuste aplicado correctamente. Nuevo saldo: $' +
+                ((res && res.balance != null ? res.balance : 0).toLocaleString('es-CO')));
+            this.closeModal('adjustBalanceModal');
+            if (this.currentSection === 'users') this.loadUserManagement();
+        } catch (error) {
+            console.error('❌ Error en ajuste de saldo:', error);
+            alert('❌ Error al aplicar el ajuste: ' + error.message);
+        }
+    }
+
+    // ===== AUDITORÍA DE ACCIONES DEL ADMIN =====
+    async logAdminAction(action, details) {
+        if (!this.database) return;
+        try {
+            const adminId = (window.DeseoAuth && window.DeseoAuth.getUserId)
+                ? await window.DeseoAuth.getUserId() : 'unknown';
+            const ref = this.database.ref('admin/audit_log').push();
+            await ref.set({
+                action,
+                details: details || {},
+                adminId: adminId || 'unknown',
+                timestamp: new Date().toISOString()
+            });
+        } catch (e) {
+            console.warn('⚠️ No se pudo registrar auditoría:', e && e.message);
+        }
+    }
+
+    // ===== CUSTODIA (ESCROW) =====
+    async loadEscrow() {
+        console.log('🔒 Cargando custodia (escrow)...');
+        const list = document.getElementById('escrowList');
+        if (!list) return;
+
+        // El dinero vive en Supabase (server-authoritative). El escrow se deriva
+        // del ledger vía la RPC admin rpc_admin_list_escrow (solo admin).
+        const sb = (window.DeseoSupabase) || (window.DeseoAuth && window.DeseoAuth.getSupabase && window.DeseoAuth.getSupabase());
+        if (!sb) {
+            list.innerHTML = '<div class="no-transactions"><i class="fas fa-exclamation-triangle"></i><p>Motor de dinero no disponible</p></div>';
+            return;
+        }
+
+        try {
+            const { data, error } = await sb.rpc('rpc_admin_list_escrow');
+            if (error) throw error;
+            const orders = (data || []).map(o => ({
+                orderId: o.order_id, clientId: o.client_id, amount: o.amount, status: o.status, createdAt: o.created_at
+            }));
+
+            let totalHeld = 0, active = 0, released = 0, refunded = 0;
+            orders.forEach(o => {
+                const amt = parseInt(o.amount, 10) || 0;
+                if (o.status === 'held' || !o.status) { totalHeld += amt; active++; }
+                else if (o.status === 'released') released++;
+                else if (o.status === 'refunded') refunded++;
+            });
+
+            document.getElementById('escrowTotalHeld').textContent = '$' + totalHeld.toLocaleString('es-CO');
+            document.getElementById('escrowActiveCount').textContent = active;
+            document.getElementById('escrowReleasedCount').textContent = released;
+            document.getElementById('escrowRefundedCount').textContent = refunded;
+
+            if (orders.length === 0) {
+                list.innerHTML = '<div class="no-transactions"><i class="fas fa-lock-open"></i><p>No hay órdenes en custodia</p></div>';
+                return;
+            }
+
+            const esc = (typeof escapeHtml === 'function') ? escapeHtml : (v) => String(v == null ? '' : v);
+            const escAttr = (typeof escapeAttr === 'function') ? escapeAttr : esc;
+
+            list.innerHTML = orders.map(o => {
+                const amt = parseInt(o.amount, 10) || 0;
+                const status = o.status || 'held';
+                const badge = status === 'held'
+                    ? '<span style="background:#f59e0b;color:#fff;padding:2px 8px;border-radius:12px;font-size:10px;">En custodia</span>'
+                    : status === 'released'
+                        ? '<span style="background:#10b981;color:#fff;padding:2px 8px;border-radius:12px;font-size:10px;">Liberada</span>'
+                        : '<span style="background:#ef4444;color:#fff;padding:2px 8px;border-radius:12px;font-size:10px;">Reembolsada</span>';
+                const actions = status === 'held'
+                    ? `<button class="btn-admin btn-approve" onclick="adminApp.openEscrowAction('${escAttr(o.orderId)}', ${amt}, 'release')"><i class="fas fa-check"></i> Liberar</button>
+                       <button class="btn-admin btn-reject" onclick="adminApp.openEscrowAction('${escAttr(o.orderId)}', ${amt}, 'refund')"><i class="fas fa-rotate-left"></i> Reembolsar</button>`
+                    : '';
+                return `
+                    <div class="transaction-item">
+                        <div class="transaction-info">
+                            <div class="transaction-icon" style="background: var(--primary-color);"><i class="fas fa-lock"></i></div>
+                            <div class="transaction-details">
+                                <h4>Orden ${esc(o.orderId)} ${badge}</h4>
+                                <p><strong>Monto:</strong> $${amt.toLocaleString('es-CO')} COP</p>
+                                <p><strong>Cliente:</strong> ${esc(o.clientId || o.buyerId || 'N/A')}</p>
+                                <p><strong>Proveedor:</strong> ${esc(o.providerId || o.sellerId || 'N/A')}</p>
+                            </div>
+                        </div>
+                        <div class="transaction-actions">${actions}</div>
+                    </div>
+                `;
+            }).join('');
+        } catch (error) {
+            console.error('❌ Error cargando escrow:', error);
+            list.innerHTML = '<div class="no-transactions"><i class="fas fa-exclamation-triangle"></i><p>Error al cargar custodia</p></div>';
+        }
+    }
+
+    openEscrowAction(orderId, amount, action) {
+        const modal = document.getElementById('escrowActionModal');
+        if (!modal) return;
+        document.getElementById('escrowOrderId').value = orderId;
+        document.getElementById('escrowOrderAmount').value = '$' + (amount || 0).toLocaleString('es-CO');
+        document.getElementById('escrowActionType').value = action || 'release';
+        document.getElementById('escrowToUser').value = '';
+        modal.style.display = 'flex';
+
+        const confirmBtn = document.getElementById('confirmEscrowBtn');
+        if (confirmBtn) {
+            const clone = confirmBtn.cloneNode(true);
+            confirmBtn.parentNode.replaceChild(clone, confirmBtn);
+            clone.addEventListener('click', () => this.confirmEscrowAction());
+        }
+    }
+
+    async confirmEscrowAction() {
+        const orderId = document.getElementById('escrowOrderId')?.value;
+        const action = document.getElementById('escrowActionType')?.value || 'release';
+        const toUser = document.getElementById('escrowToUser')?.value?.trim();
+
+        if (!orderId) { alert('❌ Orden inválida.'); return; }
+        if (!window.DeseoMoney) { alert('❌ Motor de dinero no disponible.'); return; }
+
+        try {
+            let res;
+            if (action === 'release') {
+                if (!toUser) { alert('❌ Debes indicar el ID del proveedor para liberar.'); return; }
+                if (!confirm(`¿Liberar la custodia de la orden ${orderId} al proveedor ${toUser}?`)) return;
+                res = await window.DeseoMoney.escrowRelease(this.database, orderId, toUser, {});
+            } else {
+                if (!confirm(`¿Reembolsar la custodia de la orden ${orderId} al cliente?`)) return;
+                res = await window.DeseoMoney.escrowRefund(this.database, orderId, {});
+            }
+
+            if (res && res.ok === false) {
+                alert('❌ No se pudo completar la acción: ' + (res.reason || 'error'));
+                return;
+            }
+
+            await this.logAdminAction('escrow_' + action, { orderId, toUser: toUser || null });
+            alert('✅ Acción de custodia completada.');
+            this.closeModal('escrowActionModal');
+            this.loadEscrow();
+        } catch (error) {
+            console.error('❌ Error en acción de escrow:', error);
+            alert('❌ Error: ' + error.message);
+        }
+    }
+
+    // ===== CONCILIACIÓN DE PAGOS =====
+    async loadReconciliation() {
+        console.log('⚖️ Cargando conciliación...');
+        const list = document.getElementById('reconciliationList');
+        if (!list) return;
+
+        // La conciliación compara los pagos reportados por la pasarela (Bold) contra
+        // las transacciones income registradas. Si la pasarela aún no está cableada a
+        // Supabase, se informa que no hay pagos (comportamiento esperado del plan).
+        const sb = (window.DeseoSupabase) || (window.DeseoAuth && window.DeseoAuth.getSupabase && window.DeseoAuth.getSupabase());
+        if (!sb) {
+            list.innerHTML = '<div class="no-transactions"><i class="fas fa-exclamation-triangle"></i><p>Motor de dinero no disponible</p></div>';
+            return;
+        }
+
+        try {
+            // Pagos registrados en la pasarela. Se intenta leer de una tabla/general si
+            // existiera; en este modelo los pagos conciliables son transacciones income
+            // completadas del nodo Firebase. Si no hay tabla de pagos, mostramos vacío.
+            let payments = [];
+            try {
+                const pr = await sb.from('payments').select('*').limit(500);
+                if (!pr.error && Array.isArray(pr.data)) payments = pr.data;
+            } catch (_) { /* tabla no existe aún: pagos = [] */ }
+
+            // Transacciones registradas (income completadas) para cruzar.
+            const ledgerIncome = this.allTransactions.filter(t =>
+                t.transaction.type === 'income' && t.transaction.status === 'completed'
+            );
+
+            let gatewayTotal = 0, ledgerTotal = 0, diffs = 0, unmatched = 0;
+            payments.forEach(p => {
+                const amt = parseInt(p.amount, 10) || 0;
+                gatewayTotal += amt;
+                const match = ledgerIncome.find(t =>
+                    (p.reference && t.transaction.reference === p.reference) ||
+                    (p.transactionId && t.id === p.transactionId)
+                );
+                if (!match) { unmatched++; }
+                else {
+                    ledgerTotal += parseInt(match.transaction.amount, 10) || 0;
+                    if ((parseInt(match.transaction.amount, 10) || 0) !== amt) diffs++;
+                }
+            });
+
+            document.getElementById('reconGatewayTotal').textContent = '$' + gatewayTotal.toLocaleString('es-CO');
+            document.getElementById('reconLedgerTotal').textContent = '$' + ledgerTotal.toLocaleString('es-CO');
+            document.getElementById('reconDiffCount').textContent = diffs;
+            document.getElementById('reconUnmatchedCount').textContent = unmatched;
+
+            if (payments.length === 0) {
+                list.innerHTML = '<div class="no-transactions"><i class="fas fa-balance-scale"></i><p>No hay pagos de pasarela registrados</p></div>';
+                return;
+            }
+
+            const esc = (typeof escapeHtml === 'function') ? escapeHtml : (v) => String(v == null ? '' : v);
+            list.innerHTML = payments.map(p => {
+                const amt = parseInt(p.amount, 10) || 0;
+                const match = ledgerIncome.find(t =>
+                    (p.reference && t.transaction.reference === p.reference) ||
+                    (p.transactionId && t.id === p.transactionId)
+                );
+                const badge = match
+                    ? '<span style="background:#10b981;color:#fff;padding:2px 8px;border-radius:12px;font-size:10px;">Conciliado</span>'
+                    : '<span style="background:#f59e0b;color:#fff;padding:2px 8px;border-radius:12px;font-size:10px;">Sin conciliar</span>';
+                return `
+                    <div class="transaction-item">
+                        <div class="transaction-info">
+                            <div class="transaction-icon" style="background: var(--primary-color);"><i class="fas fa-money-check-dollar"></i></div>
+                            <div class="transaction-details">
+                                <h4>Pago ${esc(p.id)} ${badge}</h4>
+                                <p><strong>Monto:</strong> $${amt.toLocaleString('es-CO')} COP</p>
+                                <p><strong>Referencia:</strong> ${esc(p.reference || 'N/A')}</p>
+                                <p><strong>Estado pasarela:</strong> ${esc(p.status || 'N/A')}</p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        } catch (error) {
+            console.error('❌ Error cargando conciliación:', error);
+            list.innerHTML = '<div class="no-transactions"><i class="fas fa-exclamation-triangle"></i><p>Error al cargar conciliación</p></div>';
+        }
+    }
+
+    exportReconciliation() {
+        const rows = [];
+        document.querySelectorAll('#reconciliationList .transaction-item').forEach(item => {
+            rows.push({ Detalle: item.innerText.replace(/\s+/g, ' ').trim() });
+        });
+        if (rows.length === 0) { alert('No hay datos para exportar.'); return; }
+        this.downloadCSV(rows, 'conciliacion.csv');
+    }
+
+    // ===== LIBRO MAYOR (LEDGER) =====
+    async loadLedger() {
+        console.log('📖 Cargando libro mayor...');
+        const list = document.getElementById('ledgerList');
+        if (!list) return;
+
+        // El ledger real vive en Supabase (server-authoritative). Se lee vía la RPC
+        // admin rpc_admin_list_ledger (solo admin).
+        const sb = (window.DeseoSupabase) || (window.DeseoAuth && window.DeseoAuth.getSupabase && window.DeseoAuth.getSupabase());
+        if (!sb) {
+            list.innerHTML = '<div class="no-transactions"><i class="fas fa-exclamation-triangle"></i><p>Motor de dinero no disponible</p></div>';
+            return;
+        }
+
+        try {
+            const { data, error } = await sb.rpc('rpc_admin_list_ledger', { p_limit: 500 });
+            if (error) throw error;
+            // Mapeo de campos Supabase -> formato que usa el render/export existente.
+            this.ledgerEntries = (data || []).map(r => ({
+                opId: r.op_id,
+                userId: r.user_id,
+                type: r.direction,          // 'in' | 'out' | 'transfer'
+                direction: r.direction,
+                amount: r.amount,
+                reason: r.reason,
+                counterpart: r.counterpart,
+                timestamp: r.created_at
+            }));
+            this.renderLedger(this.ledgerEntries);
+        } catch (error) {
+            console.error('❌ Error cargando ledger:', error);
+            list.innerHTML = '<div class="no-transactions"><i class="fas fa-exclamation-triangle"></i><p>Error al cargar libro mayor</p></div>';
+        }
+    }
+
+    renderLedger(entries) {
+        const list = document.getElementById('ledgerList');
+        if (!list) return;
+
+        if (!entries || entries.length === 0) {
+            list.innerHTML = '<div class="no-transactions"><i class="fas fa-book"></i><p>No hay movimientos contables</p></div>';
+            return;
+        }
+
+        const esc = (typeof escapeHtml === 'function') ? escapeHtml : (v) => String(v == null ? '' : v);
+        list.innerHTML = entries.map(e => {
+            const amt = parseInt(e.amount, 10) || 0;
+            const dir = (e.direction || e.type || '').toLowerCase();
+            const isCredit = dir === 'in' || dir.indexOf('credit') !== -1 || dir.indexOf('deposit') !== -1;
+            const color = isCredit ? 'var(--primary-color)' : '#ef4444';
+            const icon = isCredit ? 'fas fa-arrow-up' : 'fas fa-arrow-down';
+            const date = e.timestamp ? new Date(e.timestamp).toLocaleString('es-ES') : 'N/A';
+            const label = dir === 'in' ? 'Crédito' : dir === 'out' ? 'Débito' : (e.type || 'movimiento');
+            return `
+                <div class="transaction-item">
+                    <div class="transaction-info">
+                        <div class="transaction-icon" style="background: ${color};"><i class="${icon}"></i></div>
+                        <div class="transaction-details">
+                            <h4>${esc(label)}</h4>
+                            <p><strong>Usuario:</strong> ${esc(e.userId || e.user_id || 'N/A')}</p>
+                            <p><strong>Monto:</strong> $${amt.toLocaleString('es-CO')} COP</p>
+                            <p><strong>Motivo:</strong> ${esc(e.reason || 'N/A')}</p>
+                            <p><strong>opId:</strong> ${esc(e.opId || e.op_id || 'N/A')}</p>
+                            <p><strong>Fecha:</strong> ${esc(date)}</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    applyLedgerFilters() {
+        if (!this.ledgerEntries) return;
+        const user = document.getElementById('ledgerUserSearch')?.value?.toLowerCase();
+        const type = document.getElementById('ledgerTypeFilter')?.value || 'all';
+        const from = document.getElementById('ledgerDateFrom')?.value;
+        const to = document.getElementById('ledgerDateTo')?.value;
+
+        let filtered = this.ledgerEntries;
+        if (user) filtered = filtered.filter(e => String(e.userId || e.user_id || '').toLowerCase().includes(user));
+        if (type !== 'all') { const t = type.toLowerCase(); filtered = filtered.filter(e => String(e.direction || e.type || '').toLowerCase().includes(t) || String(e.reason || '').toLowerCase().includes(t)); }
+        if (from) { const f = new Date(from); filtered = filtered.filter(e => new Date(e.timestamp) >= f); }
+        if (to) { const t = new Date(to); t.setHours(23,59,59,999); filtered = filtered.filter(e => new Date(e.timestamp) <= t); }
+        this.renderLedger(filtered);
+    }
+
+    clearLedgerFilters() {
+        const ids = ['ledgerUserSearch', 'ledgerTypeFilter', 'ledgerDateFrom', 'ledgerDateTo'];
+        ids.forEach(id => { const el = document.getElementById(id); if (el) el.value = id === 'ledgerTypeFilter' ? 'all' : ''; });
+        this.renderLedger(this.ledgerEntries || []);
+    }
+
+    exportLedger() {
+        const entries = this.ledgerEntries || [];
+        if (entries.length === 0) { alert('No hay datos para exportar.'); return; }
+        const data = entries.map(e => ({
+            opId: e.opId || e.op_id || '',
+            Usuario: e.userId || e.user_id || '',
+            Tipo: e.direction || e.type || '',
+            Monto: e.amount || 0,
+            Motivo: e.reason || '',
+            Fecha: e.timestamp ? new Date(e.timestamp).toLocaleString('es-ES') : ''
+        }));
+        this.downloadCSV(data, 'libro_mayor.csv');
     }
 
     // ===== RESPONSIVE HANDLING =====

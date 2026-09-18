@@ -37,6 +37,8 @@ desktop.ini
 .netlify/
 
 # ===== Archivos temporales de depuración / pruebas =====
+# IMPORTANTE: estos archivos pueden contener secretos (PAT de Supabase, tokens,
+# credenciales de prueba). NUNCA deben versionarse.
 _dbg*.js
 _suite*.js
 _suite*.txt
@@ -45,6 +47,19 @@ _verify_*.js
 _flows*.txt
 _final_*.txt
 temp_end.txt
+_bugtest.js
+_bug*.js
+_bug*.txt
+
+# Scripts/probes auxiliares y sus salidas (pueden contener PAT/service_role)
+_apply_sql.js
+_probe_*.js
+_run_*.js
+_srv*.js
+_srv*.txt
+_*.log
+_diag_*.html
+_e2e_*.html
 
 # ===== Páginas de prueba (no forman parte de la app) =====
 test-auth.html
@@ -52,6 +67,9 @@ test-buttons.html
 
 # ===== Informes de auditoría con secretos/PII (NO versionar) =====
 INFORME_AUDITORIA.md
+
+# ===== Informes internos de auditoría (no forman parte de la app) =====
+_informes/
 
 
 

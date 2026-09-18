@@ -21,6 +21,7 @@ class InlineWalletManager {
         
         await this.loadBalance();
         await this.loadTransactions();
+        await this.loadLedger();
         await this.loadMicrotransactions();
         this.initializeTheme();
         this.renderBalance();
@@ -43,6 +44,8 @@ class InlineWalletManager {
             if (this.balanceListenerRef && this.balanceListener) {
                 try { this.balanceListenerRef.off('value', this.balanceListener); } catch (_) {}
             }
+            if (this._sbPollTimer) { clearInterval(this._sbPollTimer); this._sbPollTimer = null; }
+            if (this._ledgerPollTimer) { clearInterval(this._ledgerPollTimer); this._ledgerPollTimer = null; }
         });
     }
 
@@ -213,6 +216,10 @@ class InlineWalletManager {
 
             // FUENTE AUTORITATIVA del saldo: Supabase (balances). Firebase queda
             // como fallback mientras se migra. El saldo real vive en Supabase.
+            // Esperar a la sesión (Clerk/Supabase) para que RLS resuelva auth.uid().
+            if (window.DeseoAuth && window.DeseoAuth.ready) {
+                try { await Promise.race([window.DeseoAuth.ready, new Promise(r => setTimeout(r, 8000))]); } catch (_) {}
+            }
             let sbBalance = null;
             try {
                 if (window.DeseoMoney && window.DeseoMoney.getBalance) {
@@ -339,6 +346,104 @@ class InlineWalletManager {
         }
     }
 
+    // -----------------------------------------------------------------
+    // HISTORIAL REAL (Supabase ledger)
+    // -----------------------------------------------------------------
+    // El dinero ya NO vive en Firebase: cada cobro (mensaje, propina, fotos,
+    // encuentro) y cada abono/retiro se registra en el LEDGER de Supabase vía
+    // RPC. Por eso el historial de Firebase (transactions/{uid}) no mostraba
+    // los descuentos. Aquí se leen los movimientos PROPIOS (rpc_my_ledger) y se
+    // combinan con las solicitudes heredadas de Nequi (recarga/retiro), que
+    // siguen viviendo en Firebase hasta ser aprobadas por el admin.
+    async loadLedger() {
+        try {
+            // Esperar a que Clerk/Supabase estén listos para que la RLS pueda
+            // resolver auth.uid() (sin sesión, el ledger vendría vacío).
+            if (window.DeseoAuth && window.DeseoAuth.ready) {
+                try { await Promise.race([window.DeseoAuth.ready, new Promise(r => setTimeout(r, 8000))]); } catch (_) {}
+            }
+            const userId = this.getCurrentUserId();
+            if (!userId) { this.ledgerTransactions = []; return; }
+            if (!window.DeseoMoney || !window.DeseoMoney.getLedger) { this.ledgerTransactions = []; return; }
+
+            const rows = await window.DeseoMoney.getLedger(this.database, { limit: 200 });
+            this.ledgerTransactions = (Array.isArray(rows) ? rows : [])
+                .map((row, idx) => this.mapLedgerRow(row, idx))
+                .filter(Boolean);
+            console.log('✅ Movimientos cargados desde ledger (Supabase):', this.ledgerTransactions.length);
+            this.renderTransactions((this._activeFilter || 'all'));
+
+            // Refrescar periódicamente (fuente de verdad server-side).
+            if (this._ledgerPollTimer) clearInterval(this._ledgerPollTimer);
+            this._ledgerPollTimer = setInterval(() => { this.loadLedger(); }, 20000);
+        } catch (e) {
+            console.error('❌ Error cargando ledger:', e);
+            this.ledgerTransactions = this.ledgerTransactions || [];
+        }
+    }
+
+    // Etiqueta humana por razón del ledger.
+    ledgerReasonLabel(reason, direction) {
+        const r = String(reason || '').toLowerCase();
+        const inFlow = direction === 'in';
+        if (r === 'message') return inFlow ? 'Pago recibido por mensaje' : 'Pago por mensaje';
+        if (r.indexOf('propina') !== -1) return inFlow ? 'Propina recibida' : 'Propina enviada';
+        if (r === 'paid_photos' || r.indexOf('photo') !== -1 || r.indexOf('foto') !== -1) return inFlow ? 'Pago recibido por fotos' : 'Desbloqueo de fotos';
+        if (r.indexOf('encounter') !== -1) {
+            if (r.indexOf('release') !== -1) return 'Pago recibido por encuentro';
+            if (r.indexOf('refund') !== -1) return 'Reembolso de encuentro';
+            return inFlow ? 'Encuentro (ingreso)' : 'Pago retenido por encuentro';
+        }
+        if (r.indexOf('withdrawal') !== -1 || r.indexOf('retiro') !== -1) {
+            if (r.indexOf('refund') !== -1 || r.indexOf('rejected') !== -1) return 'Reembolso de retiro';
+            return 'Retiro solicitado';
+        }
+        if (r.indexOf('deposit') !== -1 || r.indexOf('recarga') !== -1 || r.indexOf('topup') !== -1) return 'Recarga de saldo';
+        if (r === 'transfer') return inFlow ? 'Transferencia recibida' : 'Transferencia enviada';
+        if (r === 'charge') return 'Cargo';
+        if (r === 'credit') return 'Abono';
+        return reason ? String(reason) : (inFlow ? 'Ingreso' : 'Egreso');
+    }
+
+    // Convierte una fila del ledger en el objeto que espera la UI de wallet.
+    mapLedgerRow(row, idx) {
+        if (!row) return null;
+        const direction = row.direction === 'in' ? 'in' : 'out';
+        const amount = parseInt(row.amount, 10) || 0;
+        const reasonLabel = this.ledgerReasonLabel(row.reason, direction);
+        return {
+            id: row.op_id || ('ledger_' + idx),
+            type: direction === 'in' ? 'income' : 'expense',
+            description: reasonLabel,
+            method: 'Deseo',
+            amount: amount,
+            timestamp: row.created_at || new Date().toISOString(),
+            date: row.created_at || new Date().toISOString(),
+            status: 'completed',
+            source: 'ledger',
+            rawReason: row.reason || '',
+            chatId: row.chat_id || null,
+            counterpart: row.counterpart || null
+        };
+    }
+
+    // Une movimientos del ledger (reales) con transacciones heredadas de Firebase
+    // (solicitudes de recarga/retiro). Deduplica por id.
+    mergedTransactions() {
+        const legacy = Array.isArray(this.transactions) ? this.transactions : [];
+        const ledger = Array.isArray(this.ledgerTransactions) ? this.ledgerTransactions : [];
+        const seen = new Set();
+        const out = [];
+        ledger.concat(legacy).forEach(t => {
+            const key = t && (t.id || (t.type + '|' + t.amount + '|' + (t.timestamp || t.date)));
+            if (key && seen.has(key)) return;
+            if (key) seen.add(key);
+            out.push(t);
+        });
+        out.sort((a, b) => new Date(b.timestamp || b.date) - new Date(a.timestamp || a.date));
+        return out;
+    }
+
     setupTransactionListener(userId) {
         if (!this.database) return;
 
@@ -447,9 +552,10 @@ class InlineWalletManager {
         const transactionsList = document.getElementById('transactionsList');
         if (!transactionsList) return;
 
-        let filteredTransactions = this.transactions;
+        this._activeFilter = filter;
+        let filteredTransactions = this.mergedTransactions();
         if (filter !== 'all') {
-            filteredTransactions = this.transactions.filter(t => t.type === filter);
+            filteredTransactions = filteredTransactions.filter(t => t.type === filter);
         }
         filteredTransactions.sort((a, b) => new Date(b.timestamp || b.date) - new Date(a.timestamp || a.date));
 
@@ -610,6 +716,7 @@ class InlineWalletManager {
         const txList = document.getElementById('transactionsList');
         const microList = document.getElementById('microtransactionsList');
         if (!txList || !microList) return;
+        this._activeFilter = filter;
         if (filter === 'micro') {
             txList.style.display = 'none';
             microList.style.display = 'block';
@@ -624,21 +731,54 @@ class InlineWalletManager {
     async loadMicrotransactions() {
         try {
             const userId = this.getCurrentUserId();
-            if (!userId || !this.database) { this.microtransactions = []; return; }
-            const ref = this.database.ref(`users/${userId}/microtransactions`);
-            const snap = await ref.once('value');
-            const data = snap.val();
-            this.microtransactions = data ? Object.values(data).sort((a,b)=> new Date(b.timestamp) - new Date(a.timestamp)) : [];
-            // Listener en tiempo real
-            ref.on('value', (s) => {
-                const d = s.val();
-                this.microtransactions = d ? Object.values(d).sort((a,b)=> new Date(b.timestamp) - new Date(a.timestamp)) : [];
-                this.renderMicrotransactions();
+            // FUENTE DE VERDAD: microtransacciones = movimientos del ledger de
+            // Supabase con motivo micropago (mensaje, propina, fotos, encuentro).
+            // Antes se leían de Firebase users/{uid}/microtransactions, que el
+            // sistema de dinero actual NO escribe → la pestaña salía siempre vacía.
+            await this.loadLedger();
+            const fromLedger = (this.ledgerTransactions || []).filter(t =>
+                t.reason === 'message' ||
+                /propina|photo|foto|encounter|encuentro|tip/i.test(String(t.rawReason || t.description || ''))
+            );
+            const fromFirebase = await this.loadFirebaseMicrotransactions(userId);
+            // Fusionar (ledger primero), deduplicando por id.
+            const seen = new Set();
+            const merged = [];
+            fromLedger.map(t => this.mapLedgerRowToMicro(t)).concat(fromFirebase).forEach(m => {
+                const key = m && m.id;
+                if (key && seen.has(key)) return;
+                if (key) seen.add(key);
+                merged.push(m);
             });
+            merged.sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
+            this.microtransactions = merged;
+            this.renderMicrotransactions();
         } catch (e) {
             console.error('❌ Error cargando microtransacciones:', e);
-            this.microtransactions = [];
+            this.microtransactions = this.microtransactions || [];
         }
+    }
+
+    // Microtransacciones heredadas de Firebase (compatibilidad).
+    async loadFirebaseMicrotransactions(userId) {
+        try {
+            if (!userId || !this.database) return [];
+            const snap = await this.database.ref(`users/${userId}/microtransactions`).once('value');
+            const data = snap.val();
+            return data ? Object.values(data) : [];
+        } catch (_) { return []; }
+    }
+
+    // Convierte un movimiento del ledger al formato de microtransacción que
+    // espera renderMicrotransactions (direction + reason + amount + timestamp).
+    mapLedgerRowToMicro(t) {
+        return {
+            id: t.id,
+            direction: t.type === 'income' ? 'in' : 'out',
+            reason: t.description,
+            amount: t.amount,
+            timestamp: t.timestamp
+        };
     }
 
     renderMicrotransactions() {
@@ -656,10 +796,10 @@ class InlineWalletManager {
             const color = m.direction === 'in' ? '#4CAF50' : '#f44336';
             item.innerHTML = `
                 <div class="transaction-info">
-                    <div class="transaction-title">Mensaje (${escapeHtml(m.reason)})</div>
+                    <div class="transaction-title">${escapeHtml(m.reason || 'Microtransacción')}</div>
                     <div class="transaction-date">${this.formatDate(m.timestamp)}</div>
                 </div>
-                <div class="transaction-amount" style="color:${color};">${sign}${escapeInt(m.amount, m.amount)}</div>
+                <div class="transaction-amount" style="color:${color};">${sign}$${Number(m.amount || 0).toFixed(2)}</div>
             `;
             container.appendChild(item);
         });

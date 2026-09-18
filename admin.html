@@ -30,6 +30,8 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <!-- Chart.js para gráficos -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- SheetJS para exportar a Excel (.xlsx) -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <!-- Firebase SDKs -->
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
@@ -1718,6 +1720,162 @@
                 </div>
             </div>
 
+            <!-- Sección de Custodia (Escrow) -->
+            <div id="escrowSection" class="dashboard-section" style="display: none;">
+                <div class="dashboard-header">
+                    <h1><i class="fas fa-lock"></i> Custodia (Escrow)</h1>
+                    <p>Fondos retenidos en custodia. Libera al proveedor o reembolsa al cliente.</p>
+                </div>
+
+                <div class="transaction-stats">
+                    <div class="stat-card">
+                        <div class="stat-icon pending"><i class="fas fa-lock"></i></div>
+                        <h3 id="escrowTotalHeld">$0</h3>
+                        <p>Total en Custodia</p>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon income"><i class="fas fa-box-open"></i></div>
+                        <h3 id="escrowActiveCount">0</h3>
+                        <p>Órdenes Activas</p>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon users"><i class="fas fa-check-double"></i></div>
+                        <h3 id="escrowReleasedCount">0</h3>
+                        <p>Liberadas</p>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon outcome"><i class="fas fa-rotate-left"></i></div>
+                        <h3 id="escrowRefundedCount">0</h3>
+                        <p>Reembolsadas</p>
+                    </div>
+                </div>
+
+                <div class="transactions-section">
+                    <div class="section-header">
+                        <h3><i class="fas fa-list"></i> Órdenes en Custodia</h3>
+                        <button class="btn-secondary" onclick="adminApp.loadEscrow()">
+                            <i class="fas fa-sync"></i> Actualizar
+                        </button>
+                    </div>
+                    <div id="escrowList" class="transactions-list">
+                        <div class="loading">
+                            <i class="fas fa-spinner"></i>
+                            <p>Cargando custodia...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sección de Conciliación de Pagos -->
+            <div id="reconciliationSection" class="dashboard-section" style="display: none;">
+                <div class="dashboard-header">
+                    <h1><i class="fas fa-balance-scale"></i> Conciliación de Pagos</h1>
+                    <p>Compara los pagos de la pasarela (Bold) con las transacciones registradas.</p>
+                </div>
+
+                <div class="transaction-stats">
+                    <div class="stat-card">
+                        <div class="stat-icon income"><i class="fas fa-money-check-dollar"></i></div>
+                        <h3 id="reconGatewayTotal">$0</h3>
+                        <p>Total Pasarela</p>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon users"><i class="fas fa-database"></i></div>
+                        <h3 id="reconLedgerTotal">$0</h3>
+                        <p>Total Registrado</p>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon pending"><i class="fas fa-triangle-exclamation"></i></div>
+                        <h3 id="reconDiffCount">0</h3>
+                        <p>Diferencias</p>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon outcome"><i class="fas fa-circle-question"></i></div>
+                        <h3 id="reconUnmatchedCount">0</h3>
+                        <p>Sin Conciliar</p>
+                    </div>
+                </div>
+
+                <div class="transactions-section">
+                    <div class="section-header">
+                        <h3><i class="fas fa-list"></i> Movimientos de Pasarela</h3>
+                        <div class="export-actions">
+                            <button class="btn-secondary" onclick="adminApp.loadReconciliation()">
+                                <i class="fas fa-sync"></i> Actualizar
+                            </button>
+                            <button class="btn-export" onclick="adminApp.exportReconciliation()">
+                                <i class="fas fa-file-csv"></i> Exportar
+                            </button>
+                        </div>
+                    </div>
+                    <div id="reconciliationList" class="transactions-list">
+                        <div class="loading">
+                            <i class="fas fa-spinner"></i>
+                            <p>Cargando conciliación...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sección de Libro Mayor (Ledger) -->
+            <div id="ledgerSection" class="dashboard-section" style="display: none;">
+                <div class="dashboard-header">
+                    <h1><i class="fas fa-book"></i> Libro Mayor (Ledger)</h1>
+                    <p>Registro contable de todos los movimientos con trazabilidad por opId.</p>
+                </div>
+
+                <div class="advanced-filters">
+                    <div class="filter-group">
+                        <label>Buscar usuario:</label>
+                        <input type="text" id="ledgerUserSearch" class="filter-input" placeholder="ID del usuario">
+                    </div>
+                    <div class="filter-group">
+                        <label>Tipo de movimiento:</label>
+                        <select id="ledgerTypeFilter" class="filter-select">
+                            <option value="all">Todos</option>
+                            <option value="credit">Créditos</option>
+                            <option value="charge">Débitos</option>
+                            <option value="transfer">Transferencias</option>
+                            <option value="escrow">Escrow</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label>Desde:</label>
+                        <input type="date" id="ledgerDateFrom" class="filter-input">
+                    </div>
+                    <div class="filter-group">
+                        <label>Hasta:</label>
+                        <input type="date" id="ledgerDateTo" class="filter-input">
+                    </div>
+                    <button class="btn-filter" onclick="adminApp.applyLedgerFilters()">
+                        <i class="fas fa-search"></i> Filtrar
+                    </button>
+                    <button class="btn-clear" onclick="adminApp.clearLedgerFilters()">
+                        <i class="fas fa-times"></i> Limpiar
+                    </button>
+                </div>
+
+                <div class="transactions-section">
+                    <div class="section-header">
+                        <h3><i class="fas fa-list"></i> Movimientos Contables</h3>
+                        <div class="export-actions">
+                            <button class="btn-secondary" onclick="adminApp.loadLedger()">
+                                <i class="fas fa-sync"></i> Actualizar
+                            </button>
+                            <button class="btn-export" onclick="adminApp.exportLedger()">
+                                <i class="fas fa-file-csv"></i> Exportar CSV
+                            </button>
+                        </div>
+                    </div>
+                    <div id="ledgerList" class="transactions-list">
+                        <div class="loading">
+                            <i class="fas fa-spinner"></i>
+                            <p>Cargando libro mayor...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Sección de Configuración del Sistema -->
             <div id="settingsSection" class="dashboard-section" style="display: none;">
                 <div class="dashboard-header">
@@ -1895,6 +2053,68 @@
             </div>
         </div>
                         </div>
+
+    <!-- Modal para ajustar saldo -->
+    <div class="modal" id="adjustBalanceModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2><i class="fas fa-wallet"></i> Ajustar Saldo</h2>
+                <button class="close-btn" onclick="adminApp.closeModal('adjustBalanceModal')">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="message-form">
+                    <label>Usuario:</label>
+                    <input type="text" id="adjustUserId" class="setting-input" readonly>
+                    <label style="margin-top: 12px;">Tipo de ajuste:</label>
+                    <select id="adjustType" class="setting-select">
+                        <option value="credit">Acreditar (sumar saldo)</option>
+                        <option value="charge">Debitar (restar saldo)</option>
+                    </select>
+                    <label style="margin-top: 12px;">Monto (COP):</label>
+                    <input type="number" id="adjustAmount" class="setting-input" min="1" placeholder="Ej: 50000">
+                    <label style="margin-top: 12px;">Motivo (obligatorio):</label>
+                    <textarea id="adjustReason" class="message-input" placeholder="Explica el motivo del ajuste (queda en auditoría)..."></textarea>
+                    <div class="message-actions">
+                        <button class="btn-cancel" onclick="adminApp.closeModal('adjustBalanceModal')">Cancelar</button>
+                        <button class="btn-save" id="confirmAdjustBtn">Confirmar Ajuste</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal para acción de escrow -->
+    <div class="modal" id="escrowActionModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2><i class="fas fa-lock"></i> Acción de Custodia</h2>
+                <button class="close-btn" onclick="adminApp.closeModal('escrowActionModal')">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="message-form">
+                    <label>Orden:</label>
+                    <input type="text" id="escrowOrderId" class="setting-input" readonly>
+                    <label style="margin-top: 12px;">Monto en custodia:</label>
+                    <input type="text" id="escrowOrderAmount" class="setting-input" readonly>
+                    <label style="margin-top: 12px;">Acción:</label>
+                    <select id="escrowActionType" class="setting-select">
+                        <option value="release">Liberar al proveedor</option>
+                        <option value="refund">Reembolsar al cliente</option>
+                    </select>
+                    <label style="margin-top: 12px;">Proveedor (para liberar):</label>
+                    <input type="text" id="escrowToUser" class="setting-input" placeholder="ID del proveedor">
+                    <div class="message-actions">
+                        <button class="btn-cancel" onclick="adminApp.closeModal('escrowActionModal')">Cancelar</button>
+                        <button class="btn-save" id="confirmEscrowBtn">Confirmar</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- Scripts -->
     <script src="config.local.js"></script>

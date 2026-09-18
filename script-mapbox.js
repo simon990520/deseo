@@ -105,6 +105,10 @@ class DeseoApp {
         
         // Forzar actualización de todos los componentes que dependen de la autenticación
         this.forceAuthStateUpdate();
+
+        // Ahora que hay usuario, instalar los listeners de notificaciones de
+        // chat (en el arranque corren antes de que exista la sesión y se saltan).
+        this.refreshNotificationListeners();
     }
 
     handleClerkSignOut() {
@@ -764,6 +768,8 @@ class DeseoApp {
                 console.log('✅ Usuario encontrado en localStorage:', this.currentUser.name);
                 this.updateAuthUI();
                 this.forceAuthStateUpdate();
+                // Instalar listeners de notificación de chat ya con usuario.
+                this.refreshNotificationListeners();
                 return true;
             } catch (e) {
                 console.error('❌ Error parseando datos de usuario:', e);
@@ -1390,41 +1396,50 @@ class DeseoApp {
     }
 
     setupAvailabilityModal() {
-        // Prevenir múltiples event listeners
+        const toggle = document.getElementById('availabilityToggle');
+        const categorySelection = document.getElementById('categorySelection');
+        const saveBtn = document.getElementById('saveAvailability');
+
+        // Re-sincronizar el estado de la UI en CADA apertura (antes quedaba
+        // dentro del guard y en reaperturas el toggle/estado no se refrescaba).
+        this.checkCurrentAvailabilityStatus();
+
+        // Prevenir múltiples event listeners (los listeners estáticos se
+        // registran una sola vez; la selección de categoría va por delegación).
         if (this.availabilityModalSetup) {
             console.log('Modal de disponibilidad ya configurado');
             return;
         }
         this.availabilityModalSetup = true;
 
-        const toggle = document.getElementById('availabilityToggle');
-        const categorySelection = document.getElementById('categorySelection');
-        const categoryCards = document.querySelectorAll('.category-card');
-        const saveBtn = document.getElementById('saveAvailability');
-
-        // Verificar si el usuario ya está disponible
-        this.checkCurrentAvailabilityStatus();
-
         // Manejar toggle de disponibilidad
         if (toggle) {
             toggle.addEventListener('change', (e) => {
                 if (e.target.checked) {
                     categorySelection.style.display = 'block';
+                    // Si aún no hay categoría seleccionada, preseleccionar la
+                    // primera para evitar guardar sin categoría.
+                    if (!document.querySelector('.category-card.selected')) {
+                        const first = document.querySelector('.category-card');
+                        if (first) first.classList.add('selected');
+                    }
                 } else {
                     categorySelection.style.display = 'none';
                 }
             });
         }
 
-        // Manejar selección de categorías
-        categoryCards.forEach(card => {
-            card.addEventListener('click', () => {
-                // Remover selección anterior
-                categoryCards.forEach(c => c.classList.remove('selected'));
-                // Seleccionar nueva categoría
+        // Manejar selección de categorías por DELEGACIÓN (resistente a
+        // re-render y a clicks sobre <i>/<span> hijos; antes se ataba a cada
+        // card y podía perderse la selección).
+        if (categorySelection) {
+            categorySelection.addEventListener('click', (e) => {
+                const card = e.target.closest('.category-card');
+                if (!card) return;
+                document.querySelectorAll('.category-card').forEach(c => c.classList.remove('selected'));
                 card.classList.add('selected');
             });
-        });
+        }
 
         // Manejar botón guardar
         if (saveBtn) {
@@ -1517,8 +1532,24 @@ class DeseoApp {
             throw new Error('Ya estás marcado como disponible');
         }
 
-        // Obtener datos del formulario
-        const selectedCategory = document.querySelector('.category-card.selected');
+        // Obtener datos del formulario. Si el usuario aún no eligió, intentar
+        // preseleccionar la categoría actual o la primera disponible en vez de
+        // fallar en seco (antes lanzaba "selecciona una categoría" sin mostrar
+        // la sección de categorías ni dar salida).
+        let selectedCategory = document.querySelector('.category-card.selected');
+        if (!selectedCategory) {
+            const categorySelection = document.getElementById('categorySelection');
+            if (categorySelection) categorySelection.style.display = 'block';
+
+            const existing = this.availableProfiles.find(p => p.userId === this.currentUser.id);
+            if (existing && existing.category) {
+                selectedCategory = document.querySelector(`.category-card[data-category="${existing.category}"]`);
+            }
+            if (!selectedCategory) {
+                selectedCategory = document.querySelector('.category-card');
+            }
+            if (selectedCategory) selectedCategory.classList.add('selected');
+        }
         if (!selectedCategory) {
             console.log('❌ No se seleccionó categoría');
             throw new Error('Por favor selecciona una categoría');
@@ -1613,11 +1644,18 @@ class DeseoApp {
 
     // ===== FUNCIONES PARA MANEJAR DISPONIBILIDAD =====
     checkCurrentAvailabilityStatus() {
-        if (!this.currentUser) return;
-
-        const existingProfile = this.availableProfiles.find(profile => profile.userId === this.currentUser.id);
         const toggle = document.getElementById('availabilityToggle');
         const categorySelection = document.getElementById('categorySelection');
+        if (!toggle || !categorySelection) return;
+
+        if (!this.currentUser) {
+            // Sin sesión: dejar la UI en estado consistente.
+            toggle.checked = false;
+            categorySelection.style.display = 'none';
+            return;
+        }
+
+        const existingProfile = this.availableProfiles.find(profile => profile.userId === this.currentUser.id);
 
         if (existingProfile) {
             // Usuario ya está disponible
@@ -1637,10 +1675,12 @@ class DeseoApp {
                 }
             }
         } else {
-            // Usuario no está disponible
+            // Usuario no está disponible: apagar toggle y ocultar categorías,
+            // limpiando cualquier selección previa para no arrastrar estado.
             console.log('🔍 [DEBUG] Usuario no está disponible, configurando UI');
             toggle.checked = false;
             categorySelection.style.display = 'none';
+            document.querySelectorAll('.category-card.selected').forEach(c => c.classList.remove('selected'));
         }
     }
 
@@ -3221,7 +3261,10 @@ class DeseoApp {
                 contactBtn.addEventListener('click', (e) => {
                     e.preventDefault();
                     e.stopPropagation();
-                    this.contactProfile(profile.userId);
+                    // Resolver el id real del contacto: normalmente profile.userId;
+                    // si falta (datos viejos), usar profile.id para no enviar undefined.
+                    const contactId = profile.userId || profile.id || null;
+                    this.contactProfile(contactId);
                 });
             }
 
@@ -3278,8 +3321,21 @@ class DeseoApp {
     }
 
     async contactProfile(userId) {
-        console.log('Contactando usuario:', userId);
-        
+        // Normalizar: aceptar id directo o un objeto perfil. Nunca dejar pasar
+        // "undefined"/"null"/NaN (eso enviaba el chat al handoff viejo).
+        let contactId = userId;
+        if (contactId && typeof contactId === 'object') {
+            contactId = contactId.userId || contactId.id || contactId.user_id || null;
+        }
+        const isBad = (v) => v === undefined || v === null || v === '' || v === 'undefined' || v === 'null' || (typeof v === 'number' && Number.isNaN(v));
+        if (isBad(contactId)) {
+            console.error('❌ contactProfile: userId inválido', userId);
+            this.showNotification('No se pudo identificar al usuario a contactar', 'error');
+            return;
+        }
+        contactId = String(contactId);
+        console.log('Contactando usuario:', contactId);
+
         try {
             // Verificar que el usuario esté autenticado
             if (!this.currentUser || !this.currentUser.id) {
@@ -3288,30 +3344,49 @@ class DeseoApp {
             }
 
             // No permitir contactarse a sí mismo
-            if (userId === this.currentUser.id) {
+            if (contactId === String(this.currentUser.id)) {
                 this.showNotification('No puedes contactarte a ti mismo', 'error');
                 return;
             }
 
             // Crear o obtener ID del chat
-            const chatId = await this.createOrGetChat(userId);
+            const chatId = await this.createOrGetChat(contactId);
 
             // Validar que tengamos ambos parámetros antes de redirigir; si no,
             // evitamos abrir una URL con "undefined" (que provoca el error
             // "Faltan parámetros en la URL" en chat-client.html).
-            if (!chatId || !userId) {
-                console.error('❌ No se puede abrir el chat: faltan datos', { chatId, userId });
+            if (!chatId || !contactId) {
+                console.error('❌ No se puede abrir el chat: faltan datos', { chatId, contactId });
                 this.showNotification('No se pudo abrir el chat (datos incompletos)', 'error');
                 return;
             }
-            
+
             // LÓGICA CORREGIDA:
             // El usuario actual (que presiona "Contactar") es el CLIENTE
             // El usuario contactado (que está en el mapa) es el PROVEEDOR
             // Por lo tanto, el usuario actual va a chat-client.html
             // Y el usuario contactado debe ir a chat-provider.html cuando abra el chat
-            
-            window.location.href = `chat-client.html?chatId=${encodeURIComponent(chatId)}&userId=${encodeURIComponent(userId)}`;
+
+            // Handoff fresco ANTES de navegar. Contactar desde el mapa no pasaba
+            // por chats.js (que sí guardaba este respaldo), así que si el host
+            // reescribía la URL y perdía el query string, chat-client.js caía al
+            // handoff VIEJO de un chat anterior y abría a la persona equivocada.
+            // Guardamos SIEMPRE los datos del chat recién seleccionado.
+            const targetPage = 'chat-client.html';
+            try {
+                const payload = {
+                    chatId: String(chatId),
+                    otherUserId: String(contactId),
+                    target: targetPage,
+                    ts: Date.now()
+                };
+                sessionStorage.setItem('deseo_chat_handoff', JSON.stringify(payload));
+                localStorage.setItem('deseo_chat_handoff', JSON.stringify(payload));
+            } catch (_) {
+                // sessionStorage/localStorage pueden no estar disponibles (modo privado estricto).
+            }
+
+            window.location.href = `${targetPage}?chatId=${encodeURIComponent(chatId)}&userId=${encodeURIComponent(contactId)}`;
 
 
         } catch (error) {
@@ -5365,19 +5440,44 @@ class DeseoApp {
 
     // ===== ALERTA DE CHATS SIN RESPONDER =====
     initializeUnreadChatsAlert() {
-        // Configurar botón para marcar todos como leídos
-        const markAllReadBtn = document.getElementById('markAllReadBtn');
-        if (markAllReadBtn) {
-            markAllReadBtn.addEventListener('click', () => {
-                this.markAllChatsAsRead();
-            });
+        // Configurar botón para marcar todos como leídos (una sola vez)
+        if (!this._unreadAlertBtnBound) {
+            this._unreadAlertBtnBound = true;
+            const markAllReadBtn = document.getElementById('markAllReadBtn');
+            if (markAllReadBtn) {
+                markAllReadBtn.addEventListener('click', () => {
+                    this.markAllChatsAsRead();
+                });
+            }
         }
 
         // Solicitar permisos de notificación
         this.requestNotificationPermission();
 
-        // Iniciar listener de chats sin responder
+        // Reintentar cuando la sesión se resuelva (login tardío vía Clerk o
+        // localStorage). Sin esto los listeners quedaban sin instalar porque en
+        // el arranque this.currentUser aún es null.
+        if (!this._notifAuthRetryBound) {
+            this._notifAuthRetryBound = true;
+            window.addEventListener('authStateChanged', () => {
+                this.refreshNotificationListeners();
+            });
+        }
+
+        // Iniciar listener de chats sin responder. Si aún no hay usuario
+        // (arranque antes de que Clerk/localStorage resuelvan la sesión), el
+        // listener se instala luego desde refreshNotificationListeners().
         this.setupUnreadChatsListener();
+    }
+
+    // Re-instala los listeners de notificación cuando el usuario ya existe.
+    // Se llama tras el login (Clerk o localStorage). Es idempotente.
+    refreshNotificationListeners() {
+        if (!this.database || !this.currentUser || !this.currentUser.id) return;
+        this.setupUnreadChatsListener();
+        this.loadAllMessages().finally(() => {
+            this.setupNewMessagesListener();
+        });
     }
 
     setupUnreadChatsListener() {
@@ -5411,50 +5511,60 @@ class DeseoApp {
 
             console.log('🔍 [DEBUG] Usuario actual ID:', currentUserId);
 
-            // Contar chats sin responder
+            // Contar chats con mensajes sin leer/responder.
             Object.values(chatsData).forEach(chat => {
                 console.log('🔍 [DEBUG] Procesando chat:', chat.id);
-                
+
                 if (chat.participants && chat.participants[currentUserId]) {
                     const userParticipant = chat.participants[currentUserId];
                     console.log('🔍 [DEBUG] Participante del usuario:', userParticipant);
-                    
-                    // Solo contar si el usuario es proveedor (debe responder)
-                    if (userParticipant.role === 'provider') {
-                        console.log('🔍 [DEBUG] Usuario es proveedor, verificando mensajes...');
-                        
-                        // Verificar si hay mensajes sin responder
-                        if (chat.messages) {
-                            const messages = Object.values(chat.messages);
-                            const lastMessage = messages[messages.length - 1];
-                            
-                            console.log('🔍 [DEBUG] Último mensaje:', lastMessage);
-                            
-                            // Si el último mensaje no es del usuario actual y no es del sistema
-                            if (lastMessage && 
-                                lastMessage.senderId !== currentUserId && 
-                                lastMessage.senderId !== 'system' &&
-                                !lastMessage.responded) {
-                                
-                                unreadCount++;
-                                unreadChats.push({
-                                    chatId: chat.id,
-                                    senderName: lastMessage.senderName,
-                                    message: lastMessage.message
-                                });
-                                
-                                console.log('🔍 [DEBUG] Chat sin responder encontrado:', {
-                                    chatId: chat.id,
-                                    senderName: lastMessage.senderName,
-                                    message: lastMessage.message
-                                });
-                                
-                                // Enviar notificación del navegador
+
+                    // Contar para CUALQUIER participante (no solo proveedor): si
+                    // el último mensaje es de la otra persona y no está
+                    // marcado como respondido/leído, cuenta como sin leer.
+                    if (chat.messages) {
+                        const messages = Object.values(chat.messages)
+                            .filter(m => m && m.senderId !== 'system')
+                            .sort((a, b) => {
+                                const ta = a.createdAt || a.timestamp || a.id || '';
+                                const tb = b.createdAt || b.timestamp || b.id || '';
+                                return String(ta) < String(tb) ? -1 : (String(ta) > String(tb) ? 1 : 0);
+                            });
+                        const lastMessage = messages[messages.length - 1];
+
+                        console.log('🔍 [DEBUG] Último mensaje:', lastMessage);
+
+                        // Sin leer si el último mensaje NO es del usuario actual,
+                        // no fue leído por él y no está marcado como respondido.
+                        const readByMe = lastMessage && lastMessage.readBy && lastMessage.readBy[currentUserId];
+                        if (lastMessage &&
+                            lastMessage.senderId !== currentUserId &&
+                            !readByMe &&
+                            !lastMessage.responded) {
+
+                            unreadCount++;
+                            unreadChats.push({
+                                chatId: chat.id,
+                                senderName: lastMessage.senderName,
+                                message: lastMessage.message
+                            });
+
+                            console.log('🔍 [DEBUG] Chat sin leer encontrado:', {
+                                chatId: chat.id,
+                                senderName: lastMessage.senderName,
+                                message: lastMessage.message
+                            });
+
+                            // Notificación del navegador (solo una vez por
+                            // mensaje: evita spam porque el listener 'value'
+                            // se dispara en cada cambio del nodo chats).
+                            const notifKey = `${chat.id}:${lastMessage.id}`;
+                            if (!this._notifiedMessages) this._notifiedMessages = new Set();
+                            if (!this._notifiedMessages.has(notifKey)) {
+                                this._notifiedMessages.add(notifKey);
                                 this.sendBrowserNotification(lastMessage.senderName, lastMessage.message);
                             }
                         }
-                    } else {
-                        console.log('🔍 [DEBUG] Usuario no es proveedor, rol:', userParticipant.role);
                     }
                 } else {
                     console.log('🔍 [DEBUG] Usuario no participa en este chat');
@@ -5576,21 +5686,24 @@ class DeseoApp {
 
             Object.entries(chatsData).forEach(([chatId, chat]) => {
                 if (chat.participants && chat.participants[currentUserId]) {
-                    const userParticipant = chat.participants[currentUserId];
-                    
-                    // Solo marcar como leídos si el usuario es proveedor
-                    if (userParticipant.role === 'provider' && chat.messages) {
+                    // Marcar como leídos para CUALQUIER participante (no solo
+                    // proveedor), coherente con el conteo de la alerta.
+                    if (chat.messages) {
                         const messages = Object.values(chat.messages);
-                        
+
                         messages.forEach(message => {
-                            if (message.senderId !== currentUserId && 
-                                message.senderId !== 'system' && 
+                            if (message.senderId !== currentUserId &&
+                                message.senderId !== 'system' &&
                                 !message.responded) {
-                                
-                                // Marcar mensaje como respondido
+
+                                // Marcar como respondido/leído por el usuario
                                 const messageRef = this.database.ref(`chats/${chatId}/messages/${message.id}`);
                                 updatePromises.push(
-                                    messageRef.update({ responded: true, respondedAt: new Date().toISOString() })
+                                    messageRef.update({
+                                        responded: true,
+                                        respondedAt: new Date().toISOString(),
+                                        [`readBy/${currentUserId}`]: true
+                                    })
                                 );
                             }
                         });
@@ -5619,15 +5732,21 @@ class DeseoApp {
             return;
         }
 
-        // Event listener para click en la notificación
-        notificationElement.addEventListener('click', () => {
-            console.log('🔍 [DEBUG] Click en notificación de mensajes nuevos');
-            this.markNewMessagesAsRead();
-        });
+        // Event listener para click en la notificación (una sola vez)
+        if (!this._newMessagesClickBound) {
+            this._newMessagesClickBound = true;
+            notificationElement.addEventListener('click', () => {
+                console.log('🔍 [DEBUG] Click en notificación de mensajes nuevos');
+                this.markNewMessagesAsRead();
+            });
+        }
 
-        // Cargar mensajes existentes y establecer listener
-        this.loadAllMessages();
-        this.setupNewMessagesListener();
+        // Cargar mensajes existentes y establecer listener (solo si hay usuario;
+        // si no, refreshNotificationListeners() lo hará tras el login).
+        if (this.currentUser && this.currentUser.id) {
+            this.loadAllMessages();
+            this.setupNewMessagesListener();
+        }
         
         console.log('✅ [DEBUG] Notificación de mensajes nuevos inicializada');
     }

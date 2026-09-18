@@ -44,6 +44,9 @@ class ChatClient {
         
         // Cargar perfil del otro usuario
         await this.loadOtherUserProfileAndHeader();
+
+        // Mostrar el saldo PROPIO del cliente (espejo del badge del proveedor).
+        await this.loadMyBalanceBadge();
         
         // Configurar listeners DESPUÉS de cargar todo
         await new Promise(resolve => setTimeout(resolve, 100)); // Pequeño delay para asegurar DOM
@@ -146,13 +149,23 @@ class ChatClient {
             if (!raw) return null;
             try { return JSON.parse(raw); } catch (_) { return null; }
         };
+        // Solo aceptamos un handoff RECIENTE y destinado a esta pantalla. Un
+        // handoff viejo (de una conversación anterior) NO debe usarse, porque
+        // abría al usuario equivocado cuando la URL llegaba sin parámetros.
+        const MAX_AGE_MS = 2 * 60 * 1000; // 2 minutos
+        const isUsable = (h) => {
+            if (!h || !h.chatId || !h.otherUserId) return false;
+            if (h.target && h.target !== 'chat-client.html') return false;
+            if (h.ts && (Date.now() - Number(h.ts)) > MAX_AGE_MS) return false;
+            return true;
+        };
         try {
             const s = parse(sessionStorage.getItem('deseo_chat_handoff'));
-            if (s && s.chatId && s.otherUserId) return s;
+            if (isUsable(s)) return s;
         } catch (_) { /* noop */ }
         try {
             const l = parse(localStorage.getItem('deseo_chat_handoff'));
-            if (l && l.chatId && l.otherUserId) return l;
+            if (isUsable(l)) return l;
         } catch (_) { /* noop */ }
         return null;
     }
@@ -180,6 +193,31 @@ class ChatClient {
                 const sortedIds = [currentId, String(this.otherUserId)].sort();
                 this.chatId = `chat_${sortedIds[0]}_${sortedIds[1]}`;
                 console.warn('🔁 chatId reconstruido:', this.chatId);
+            }
+
+            // VALIDACIÓN DE CONSISTENCIA (fuente de verdad = Firebase):
+            // Si tenemos ambos parámetros, verificamos contra el chat real que
+            // (1) el usuario actual sea participante y (2) otherUserId sea el
+            // otro participante. Evita abrir a la persona equivocada si la URL
+            // o el handoff venían desajustados.
+            if (this.chatId && this.otherUserId) {
+                const snap = await this.database.ref(`chats/${this.chatId}`).once('value');
+                const chat = snap.val();
+                if (chat && chat.participants) {
+                    const meParticipant = !!chat.participants[currentId] ||
+                        Object.values(chat.participants).some(p => p && p.id != null && String(p.id) === currentId);
+                    const realOther = this.pickOtherParticipant(chat, currentId);
+                    if (!meParticipant) {
+                        console.warn('⚠️ El usuario actual no pertenece a este chat; se descarta.', { chatId: this.chatId });
+                        this.chatId = null;
+                        this.otherUserId = null;
+                    } else if (realOther && String(realOther) !== String(this.otherUserId)) {
+                        console.warn('🔁 otherUserId desajustado; corregido desde el chat:', {
+                            antes: this.otherUserId, ahora: realOther
+                        });
+                        this.otherUserId = String(realOther);
+                    }
+                }
             }
         } catch (e) {
             console.warn('No se pudieron reconstruir parámetros del chat:', e && e.message);
@@ -241,6 +279,58 @@ class ChatClient {
             return alias;
         } catch (_) {
             return this.currentUser?.name || 'Usuario';
+        }
+    }
+
+    // Muestra el SALDO PROPIO del cliente en el encabezado del chat (espejo del
+    // badge que ve el proveedor). Fuente autoritativa: Supabase (getBalance, que
+    // sí puede leer el saldo propio vía RLS); fallback: Firebase RTDB
+    // users/{uid}/balance → wallet/{uid}/balance.
+    async loadMyBalanceBadge() {
+        try {
+            const badge = document.getElementById('myBalanceBadge');
+            const uid = this.currentUser && this.currentUser.id;
+            if (!uid) return;
+            // Esperar a Clerk/Supabase (sin token, getBalance daría null por RLS).
+            if (window.DeseoAuth && window.DeseoAuth.waitForSupabase) {
+                try { await window.DeseoAuth.waitForSupabase; } catch (_) { /* noop */ }
+            }
+            if (window.DeseoAuth && window.DeseoAuth.ready) {
+                try { await Promise.race([window.DeseoAuth.ready, new Promise(r => setTimeout(r, 8000))]); } catch (_) { /* noop */ }
+            }
+            let balance = null;
+            try {
+                if (window.DeseoMoney && window.DeseoMoney.getBalance) {
+                    const b = await window.DeseoMoney.getBalance(this.database, uid);
+                    if (typeof b === 'number' && Number.isFinite(b)) balance = b;
+                }
+            } catch (_) { /* noop */ }
+            if (balance === null && this.database) {
+                try {
+                    let snap = await this.database.ref(`users/${uid}/balance`).once('value');
+                    let v = snap.val();
+                    if (v === null || v === undefined) {
+                        const alt = await this.database.ref(`wallet/${uid}/balance`).once('value');
+                        v = alt.val();
+                    }
+                    balance = parseInt(v || '0', 10);
+                } catch (_) { balance = 0; }
+            }
+            if (badge && balance !== null) {
+                badge.textContent = `${balance} pesos`;
+                badge.style.display = 'inline-block';
+            }
+            // Refresco periódico (el saldo puede cambiar por cobros fuera del chat).
+            if (this._myBalanceTimer) clearInterval(this._myBalanceTimer);
+            this._myBalanceTimer = setInterval(async () => {
+                try {
+                    if (!window.DeseoMoney || !window.DeseoMoney.getBalance || !badge) return;
+                    const b = await window.DeseoMoney.getBalance(this.database, uid);
+                    if (typeof b === 'number' && Number.isFinite(b)) badge.textContent = `${b} pesos`;
+                } catch (_) { /* noop */ }
+            }, 15000);
+        } catch (e) {
+            console.warn('No se pudo cargar el saldo propio:', e);
         }
     }
 
@@ -607,7 +697,7 @@ class ChatClient {
             // (50%) se aplica más adelante, en el retiro (no aquí).
             const PROVIDER_CREDIT = CLIENT_COST;
 
-            // 1) Crear/persistir el mensaje con una push key única (evita colisiones Date.now).
+            // 1) Crear la referencia del mensaje con una push key única (evita colisiones Date.now).
             const tempRef = this.database.ref(`chats/${this.chatId}/messages`).push();
             const messageId = tempRef.key;
             const opId = `msg_${this.chatId}_${messageId}`;
@@ -621,17 +711,29 @@ class ChatClient {
                 price: CLIENT_COST
             };
 
-            // 2) Persistir el mensaje PRIMERO (sin cobrar aún). Así, si el cobro
-            //    falla, se elimina el mensaje y no queda dinero cobrado sin entrega.
-            await tempRef.set(messageData);
-
-            // 3) Cobrar al cliente de forma atómica e idempotente (opId derivado del id).
+            // 2) COBRAR PRIMERO, de forma atómica e idempotente (opId derivado del id).
+            //    CRÍTICO: se cobra ANTES de persistir el mensaje. Motivo: el listener
+            //    `child_added` renderiza el mensaje en cuanto se escribe en Firebase,
+            //    y NO existe `child_removed` que lo borre de la UI. Si persistiéramos
+            //    primero y el cobro fallara (saldo insuficiente), el mensaje quedaría
+            //    visible como "enviado" aunque no se cobró (bug reportado). Cobrando
+            //    primero, un cobro fallido NUNCA llega a escribir el mensaje.
             const canCharge = await this.chargeClient(CLIENT_COST, 'message', opId + '_out');
             if (!canCharge) {
-                // Compensación: revertir el mensaje persistido para no dejar un
-                // mensaje "fantasma" que el proveedor vería gratis.
-                try { await tempRef.remove(); } catch (_) {}
                 this.showError('Saldo insuficiente para enviar mensaje.');
+                return;
+            }
+
+            // 3) Persistir el mensaje (ya cobrado). Si esta escritura falla es un
+            //    caso excepcional (permisos/red); se registra el opId para soporte
+            //    y se avisa al usuario. NO se intenta un auto-reembolso porque
+            //    rpc_credit (acreditarse a sí mismo) está bloqueado por seguridad
+            //    del lado servidor: ese saldo debe resolverse vía administración.
+            try {
+                await tempRef.set(messageData);
+            } catch (setErr) {
+                console.error('❌ No se pudo persistir el mensaje tras el cobro (opId=' + opId + '):', setErr);
+                this.showError('Error enviando el mensaje. Contacta a soporte con el código: ' + opId);
                 return;
             }
 
@@ -1092,26 +1194,32 @@ class ChatClient {
             const providerCredit = amount;
             const opId = `tip_${this.chatId}_${Date.now()}_${Math.random().toString(36).slice(2,9)}`;
 
-            // 1) Persistir el mensaje de propina PRIMERO (sin cobrar aún).
+            // 1) COBRAR PRIMERO (evita mensaje visible sin cobro; mismo motivo que sendMessage).
             const messageId = this.database.ref(`chats/${this.chatId}/messages`).push().key;
             const tipMessage = `💰 **PROPINA ENVIADA**\n\n` +
                 `Monto: $${amount.toLocaleString('es-CO')}\n` +
                 (note ? `Nota: ${note}` : 'Gracias por tu excelente servicio!');
             const msgRef = this.database.ref(`chats/${this.chatId}/messages/${messageId}`);
-            await msgRef.set({
-                id: messageId,
-                senderId: this.currentUser.id,
-                senderName: this.currentUserAlias || this.currentUser.name,
-                message: tipMessage,
-                timestamp: new Date().toISOString(),
-                type: 'tip'
-            });
 
-            // 2) Cobrar al cliente (atómico, idempotente).
             const charged = await this.chargeClient(amount, 'Propina', opId + '_out');
             if (!charged) {
-                try { await msgRef.remove(); } catch (_) {}
                 this.showError('Saldo insuficiente para enviar propina');
+                return;
+            }
+
+            // 2) Persistir el mensaje de propina (ya cobrado).
+            try {
+                await msgRef.set({
+                    id: messageId,
+                    senderId: this.currentUser.id,
+                    senderName: this.currentUserAlias || this.currentUser.name,
+                    message: tipMessage,
+                    timestamp: new Date().toISOString(),
+                    type: 'tip'
+                });
+            } catch (setErr) {
+                console.error('❌ No se pudo persistir la propina tras el cobro (opId=' + opId + '):', setErr);
+                this.showError('Error enviando la propina. Contacta a soporte con el código: ' + opId);
                 return;
             }
 
@@ -1559,14 +1667,23 @@ class ChatClient {
                         updatedAt: new Date().toISOString()
                     };
                     const orderRef = this.database.ref(`encounterOrders/${orderId}`);
-                    await orderRef.set(orderData);
 
-                    // 2) Retener el monto en ESCROW (custodia server-authoritative).
+                    // 1) RETENER el monto en ESCROW PRIMERO (custodia server-authoritative,
+                    //    idempotente por orderId). Se hace antes de crear la orden para
+                    //    que, si el cobro falla, NUNCA exista una orden visible sin pago.
                     const canCharge = await this.chargeClientEscrow(offer.price, 'encounter_escrow', orderId);
                     if (!canCharge) {
-                        // Compensación: eliminar la orden reservada.
-                        try { await orderRef.remove(); } catch (_) {}
                         this.showError('Saldo insuficiente para aceptar la oferta.');
+                        return;
+                    }
+
+                    // 2) Crear la orden (ya retenido el escrow) en estado 'escrowed'.
+                    orderData.status = 'escrowed';
+                    try {
+                        await orderRef.set(orderData);
+                    } catch (setErr) {
+                        console.error('❌ No se pudo crear la orden tras retener el escrow (orderId=' + orderId + '):', setErr);
+                        this.showError('Error creando la orden. Contacta a soporte con el código: ' + orderId);
                         return;
                     }
 
@@ -2201,20 +2318,31 @@ class ChatClient {
             price: requiresPayment ? CLIENT_COST : 0
         };
 
-        // 1) Persistir PRIMERO (sin cobrar aún).
+        // 1) COBRAR PRIMERO (si aplica) ANTES de persistir. Motivo idéntico al de
+        //    sendMessage: el listener child_added pinta el mensaje al instante y
+        //    no hay child_removed que lo quite de la UI; si se persiste primero y
+        //    el cobro falla, queda un mensaje "enviado" sin cobrar (bug reportado).
         const messagesRef = this.database.ref(`chats/${this.chatId}/messages/${messageId}`);
-        await messagesRef.set(messageData);
-
-        // 2) Cobrar si aplica. Si falla, eliminar el mensaje (compensación).
         if (requiresPayment) {
             const canCharge = await this.chargeClient(CLIENT_COST, type || 'message', payOpId + '_out');
             if (!canCharge) {
-                try { await messagesRef.remove(); } catch (_) {}
                 this.showError('Saldo insuficiente para enviar mensaje.');
                 return false;
             }
+        }
+
+        // 2) Persistir el mensaje (ya cobrado si aplicaba).
+        try {
+            await messagesRef.set(messageData);
+        } catch (setErr) {
+            console.error('❌ No se pudo persistir el mensaje especial tras el cobro (opId=' + payOpId + '):', setErr);
+            this.showError('Error enviando el mensaje. Contacta a soporte con el código: ' + payOpId);
+            return false;
+        }
+
+        // 3) Acreditar al dueño del perfil (el 100%; comisión se aplica en el retiro).
+        if (requiresPayment) {
             await this.creditProvider(PROVIDER_CREDIT, type || 'message', payOpId + '_in');
-            // (La comisión de plataforma se aplicará en el retiro; no aquí.)
         }
         return true;
         } finally {

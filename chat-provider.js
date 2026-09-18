@@ -143,13 +143,23 @@ class ChatProvider {
             if (!raw) return null;
             try { return JSON.parse(raw); } catch (_) { return null; }
         };
+        // Solo aceptamos un handoff RECIENTE y destinado a esta pantalla. Un
+        // handoff viejo (de una conversación anterior) NO debe usarse, porque
+        // abría al usuario equivocado cuando la URL llegaba sin parámetros.
+        const MAX_AGE_MS = 2 * 60 * 1000; // 2 minutos
+        const isUsable = (h) => {
+            if (!h || !h.chatId || !h.otherUserId) return false;
+            if (h.target && h.target !== 'chat-provider.html') return false;
+            if (h.ts && (Date.now() - Number(h.ts)) > MAX_AGE_MS) return false;
+            return true;
+        };
         try {
             const s = parse(sessionStorage.getItem('deseo_chat_handoff'));
-            if (s && s.chatId && s.otherUserId) return s;
+            if (isUsable(s)) return s;
         } catch (_) { /* noop */ }
         try {
             const l = parse(localStorage.getItem('deseo_chat_handoff'));
-            if (l && l.chatId && l.otherUserId) return l;
+            if (isUsable(l)) return l;
         } catch (_) { /* noop */ }
         return null;
     }
@@ -177,6 +187,31 @@ class ChatProvider {
                 const sortedIds = [currentId, String(this.otherUserId)].sort();
                 this.chatId = `chat_${sortedIds[0]}_${sortedIds[1]}`;
                 console.warn('🔁 chatId reconstruido:', this.chatId);
+            }
+
+            // VALIDACIÓN DE CONSISTENCIA (fuente de verdad = Firebase):
+            // Si tenemos ambos parámetros, verificamos contra el chat real que
+            // (1) el usuario actual sea participante y (2) otherUserId sea el
+            // otro participante. Evita abrir a la persona equivocada si la URL
+            // o el handoff venían desajustados.
+            if (this.chatId && this.otherUserId) {
+                const snap = await this.database.ref(`chats/${this.chatId}`).once('value');
+                const chat = snap.val();
+                if (chat && chat.participants) {
+                    const meParticipant = !!chat.participants[currentId] ||
+                        Object.values(chat.participants).some(p => p && p.id != null && String(p.id) === currentId);
+                    const realOther = this.pickOtherParticipant(chat, currentId);
+                    if (!meParticipant) {
+                        console.warn('⚠️ El usuario actual no pertenece a este chat; se descarta.', { chatId: this.chatId });
+                        this.chatId = null;
+                        this.otherUserId = null;
+                    } else if (realOther && String(realOther) !== String(this.otherUserId)) {
+                        console.warn('🔁 otherUserId desajustado; corregido desde el chat:', {
+                            antes: this.otherUserId, ahora: realOther
+                        });
+                        this.otherUserId = String(realOther);
+                    }
+                }
             }
         } catch (e) {
             console.warn('No se pudieron reconstruir parámetros del chat:', e && e.message);
@@ -275,10 +310,25 @@ class ChatProvider {
             if (!this.database || !this.otherUserId) return;
             const badge = document.getElementById('clientBalanceBadge');
 
-            // FUENTE AUTORITATIVA: Supabase (balances). Fallback: Firebase RTDB.
+            // Esperar a que Clerk/Supabase estén listos: sin token, la RPC
+            // devolvería not_authenticated y el badge saldría vacío.
+            if (window.DeseoAuth && window.DeseoAuth.waitForSupabase) {
+                try { await window.DeseoAuth.waitForSupabase; } catch (_) { /* noop */ }
+            }
+            if (window.DeseoAuth && window.DeseoAuth.ready) {
+                try { await Promise.race([window.DeseoAuth.ready, new Promise(r => setTimeout(r, 8000))]); } catch (_) { /* noop */ }
+            }
+
+            // FUENTE AUTORITATIVA: Supabase (balances). La RLS solo permite leer
+            // el saldo PROPIO, por lo que el saldo del OTRO usuario (el cliente) se
+            // consulta vía RPC acotada rpc_public_balance (expone solo el número).
+            // Fallback: Firebase RTDB heredado.
             let balance = null;
             try {
-                if (window.DeseoMoney && window.DeseoMoney.getBalance) {
+                if (window.DeseoMoney && window.DeseoMoney.getPublicBalance) {
+                    const b = await window.DeseoMoney.getPublicBalance(this.database, this.otherUserId);
+                    if (typeof b === 'number' && Number.isFinite(b)) balance = b;
+                } else if (window.DeseoMoney && window.DeseoMoney.getBalance) {
                     const b = await window.DeseoMoney.getBalance(this.database, this.otherUserId);
                     if (typeof b === 'number' && Number.isFinite(b)) balance = b;
                 }
@@ -305,8 +355,8 @@ class ChatProvider {
             if (this._clientBalanceTimer) clearInterval(this._clientBalanceTimer);
             this._clientBalanceTimer = setInterval(async () => {
                 try {
-                    if (!window.DeseoMoney || !window.DeseoMoney.getBalance) return;
-                    const b = await window.DeseoMoney.getBalance(this.database, this.otherUserId);
+                    if (!window.DeseoMoney || !window.DeseoMoney.getPublicBalance) return;
+                    const b = await window.DeseoMoney.getPublicBalance(this.database, this.otherUserId);
                     if (badge && typeof b === 'number' && Number.isFinite(b)) badge.textContent = `${b} pesos`;
                 } catch (_) { /* noop */ }
             }, 15000);
@@ -579,10 +629,14 @@ class ChatProvider {
     async viewClientBalance() {
         if (!this.database || !this.otherUserId) return;
         try {
-            // FUENTE AUTORITATIVA: Supabase. Fallback: users/{id}/balance (RTDB).
+            // FUENTE AUTORITATIVA: Supabase. Para el saldo del cliente (otro
+            // usuario) se usa la RPC acotada rpc_public_balance; fallback RTDB.
             let balance = null;
             try {
-                if (window.DeseoMoney && window.DeseoMoney.getBalance) {
+                if (window.DeseoMoney && window.DeseoMoney.getPublicBalance) {
+                    const b = await window.DeseoMoney.getPublicBalance(this.database, this.otherUserId);
+                    if (typeof b === 'number' && Number.isFinite(b)) balance = b;
+                } else if (window.DeseoMoney && window.DeseoMoney.getBalance) {
                     const b = await window.DeseoMoney.getBalance(this.database, this.otherUserId);
                     if (typeof b === 'number' && Number.isFinite(b)) balance = b;
                 }

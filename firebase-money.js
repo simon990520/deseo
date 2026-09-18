@@ -263,6 +263,87 @@
                 if (res.error) return null;
                 return res.data ? toInt(res.data.balance) : 0;
             } catch (_) { return null; }
+        },
+
+        /**
+         * Saldo de OTRO usuario (para mostrar el saldo del cliente en el chat).
+         * Usa la RPC server-side rpc_public_balance, que expone únicamente el
+         * número de saldo (no el ledger ni datos personales). La RLS directa
+         * (balances_select_own) NO permite leer el saldo ajeno.
+         * Devuelve número, o null si no se pudo resolver.
+         */
+        async getPublicBalance(db, userId) {
+            if (!userId) return null;
+            try {
+                var r = await callRpc('rpc_public_balance', { p_user: userId });
+                var n = toInt(r);
+                if (n !== null) return n;
+                // Algunos clientes devuelven el escalar dentro de un objeto/array.
+                if (r && typeof r === 'object') {
+                    var cand = Array.isArray(r) ? r[0] : r;
+                    if (cand && typeof cand === 'object') cand = cand.rpc_public_balance !== undefined ? cand.rpc_public_balance : cand.balance;
+                    var n2 = toInt(cand);
+                    if (n2 !== null) return n2;
+                }
+            } catch (e) {
+                console.warn('[DeseoMoney] getPublicBalance falló:', e && e.message, '(¿sesión Clerk/Supabase lista?)');
+            }
+            return null;
+        },
+
+        /**
+         * Historial de movimientos PROPIO (ledger de Supabase). Devuelve un array
+         * de filas {op_id, direction, amount, reason, chat_id, counterpart,
+         * created_at} ordenadas de más reciente a más antigua.
+         *
+         * Estrategia: si existe la RPC rpc_my_ledger se usa; si no, se lee la
+         * tabla public.ledger directamente. La RLS `ledger_select_own` ya permite
+         * al usuario leer SUS PROPIOS movimientos vía PostgREST, así que el
+         * historial funciona sin necesidad de desplegar SQL nuevo.
+         */
+        async getLedger(db, options) {
+            options = options || {};
+            try {
+                // Garantizar sesión (auth.uid()) antes de leer: sin token, RLS
+                // devuelve [] aunque el usuario tenga movimientos.
+                if (window.DeseoAuth && window.DeseoAuth.waitForSupabase) {
+                    try { await window.DeseoAuth.waitForSupabase; } catch (_) {}
+                }
+                if (window.DeseoAuth && window.DeseoAuth.ready) {
+                    try { await Promise.race([window.DeseoAuth.ready, new Promise(function (r) { setTimeout(r, 8000); })]); } catch (_) {}
+                }
+                var sb = await getClient();
+                if (!sb) { console.warn('[DeseoMoney] getLedger: Supabase no disponible'); return []; }
+
+                // 1) Preferir la RPC acotada si está desplegada.
+                try {
+                    var res = await sb.rpc('rpc_my_ledger', {
+                        p_limit: options.limit || 200,
+                        p_from: options.from || null,
+                        p_to: options.to || null
+                    });
+                    if (!res.error && Array.isArray(res.data)) {
+                        return res.data.slice().sort(function (a, b) {
+                            return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+                        });
+                    }
+                } catch (_) { /* RPC no desplegada: continuar con lectura directa */ }
+
+                // 2) Lectura directa del ledger propio (RLS ledger_select_own).
+                var q = sb.from('ledger')
+                    .select('op_id,direction,amount,reason,chat_id,counterpart,created_at')
+                    .order('created_at', { ascending: false })
+                    .limit(options.limit || 200);
+                var r2 = await q;
+                if (r2 && r2.error) {
+                    console.warn('[DeseoMoney] getLedger error:', r2.error.message);
+                    return [];
+                }
+                return Array.isArray(r2.data) ? r2.data : [];
+            } catch (e) {
+                console.warn('[DeseoMoney] getLedger excepción:', e && e.message);
+                return [];
+            }
         }
     };
 

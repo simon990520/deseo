@@ -665,14 +665,19 @@ class AdminDisputes {
 
         // Pago ATÓMICO e IDEMPOTENTE vía DeseoMoney (transacción + opId + ledger).
         // Antes se hacía read-then-write directo (doble gasto sin ledger).
+        // CORRECCIÓN: usar adminCredit (acredita al usuario objetivo SIN debitar al
+        // admin). Antes se usaba money.credit → como el destino != admin, hacía un
+        // transfer admin→usuario (debita el saldo del ADMIN). El dinero de una
+        // disputa debe provenir del escrow retenido, no del bolsillo del admin, y
+        // fallaba si el admin no tenía saldo.
         const money = window.DeseoMoney;
-        if (!money || typeof money.credit !== 'function') {
-            throw new Error('DeseoMoney no disponible; abortando pago de disputa por seguridad.');
+        if (!money || typeof money.adminCredit !== 'function') {
+            throw new Error('DeseoMoney.adminCredit no disponible; abortando pago de disputa por seguridad.');
         }
 
         const creditOne = async (userId, amt, label) => {
             const opId = `dispute_${disputeId}_${label}`;
-            const res = await money.credit(this.database, userId, amt, {
+            const res = await money.adminCredit(this.database, userId, amt, {
                 reason: `dispute_resolution_${label}`,
                 disputeId: disputeId,
                 opId: opId
